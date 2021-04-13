@@ -4,6 +4,7 @@ import pandas as pd
 import random
 from collections import Counter
 from mlxtend.frequent_patterns import fpgrowth
+from mlxtend.preprocessing import TransactionEncoder
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.utils.multiclass import check_classification_targets
 from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
@@ -88,7 +89,7 @@ class BayesianRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
                 feature_labels = ["ft" + str(i + 1) for i in range(len(X[0]))]
         self.feature_labels = feature_labels
 
-    def fit(self, X, y, feature_labels: list = None, undiscretized_features=[], verbose=False):
+    def fit(self, X, y, feature_labels: list = None, undiscretized_features=[], verbose=False, already_discrete=False):
         """Fit rule lists to data
 
         Parameters
@@ -122,16 +123,24 @@ class BayesianRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
         X, y = check_X_y(X, y)
         check_classification_targets(y)
         self.n_features_in_ = X.shape[1]
+        
+        if already_discrete:
+            X = pd.DataFrame(X, columns=feature_labels)
+            X_df_onehot = BayesianRuleListClassifier.recode_samples_for_fpgrowth(X)
+            itemsets = fpgrowth(X_df_onehot, use_colnames=True, min_support=self.minsupport)["itemsets"].values
+            itemsets = [list(itemset) for itemset in itemsets]
+            
+        else:
+            
+            itemsets, self.discretizer = extract_fpgrowth(X, y,
+                                                          feature_labels=feature_labels,
+                                                          minsupport=self.minsupport,
+                                                          maxcardinality=self.maxcardinality,
+                                                          undiscretized_features=undiscretized_features,
+                                                          verbose=verbose)
 
-        itemsets, self.discretizer = extract_fpgrowth(X, y,
-                                                      feature_labels=feature_labels,
-                                                      minsupport=self.minsupport,
-                                                      maxcardinality=self.maxcardinality,
-                                                      undiscretized_features=undiscretized_features,
-                                                      verbose=verbose)
-
-        self.feature_labels = self.discretizer.feature_labels
-        X_df_onehot = self.discretizer.onehot_df
+            self.feature_labels = self.discretizer.feature_labels
+            X_df_onehot = self.discretizer.onehot_df
 
         # Now form the data-vs.-lhs set
         # X[j] is the set of data points that contain itemset j (that is, satisfy rule j)
@@ -272,3 +281,30 @@ class BayesianRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
         # print('predicting!')
         # print('preds_proba', self.predict_proba(X)[:, 1])
         return 1 * (self.predict_proba(X)[:, 1] >= threshold)
+
+    @staticmethod
+    def recode_samples_for_fpgrowth(input_df):
+        """
+        Recode the input discrete data frame into a form that is readable by FPGrowth.
+
+        Parameters
+        ----------
+        input_df : data frame
+            The original discrete data frame
+
+        Returns
+        -------
+        te_df: data frame
+            A binary data frame with one column for every feature, level pair
+        """
+        def reformat_row(row):
+            # Logic for each row
+            return np.array([feature + "_" + str(value) for feature, value 
+                             in zip(row.index, row)])
+
+        itemsets = input_df.apply(reformat_row, axis = 1)                
+        te = TransactionEncoder()
+        te.fit(itemsets)
+        te_df = pd.DataFrame(te.transform(itemsets), columns=te.columns_)
+        
+        return te_df
