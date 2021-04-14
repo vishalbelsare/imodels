@@ -129,6 +129,7 @@ class BayesianRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
             X_df_onehot = BayesianRuleListClassifier.recode_samples_for_fpgrowth(X)
             itemsets = fpgrowth(X_df_onehot, use_colnames=True, min_support=self.minsupport)["itemsets"].values
             itemsets = [list(itemset) for itemset in itemsets]
+            self.feature_labels = feature_labels
             
         else:
             
@@ -234,6 +235,15 @@ class BayesianRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
             if j > 0:
                 X[j] = set([i for (i, xi) in enumerate(X_df_onehot.values) if set(lhs).issubset(xi)])
         return X
+    
+            # Now form the data-vs.-lhs set
+        # X[j] is the set of data points that contain itemset j (that is, satisfy rule j)
+        for c in X_df_onehot.columns:
+            X_df_onehot[c] = [c if x == 1 else '' for x in list(X_df_onehot[c])]
+        X = [{}] * (len(itemsets) + 1)
+        X[0] = set(range(len(X_df_onehot)))  # the default rule satisfies all data
+        for (j, lhs) in enumerate(itemsets):
+            X[j + 1] = set([i for (i, xi) in enumerate(X_df_onehot.values) if set(lhs).issubset(xi)])
 
     def predict_proba(self, X):
         """Compute probabilities of possible outcomes for samples in X.
@@ -249,17 +259,27 @@ class BayesianRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
             the model. The columns correspond to the classes in sorted
             order, as they appear in the attribute `classes_`.
         """
+        N = X.shape[0]
         if self.discretizer:
             D = self.discretizer.apply_discretization(X)
+            X2 = self._to_itemset_indices(D[:])
         else:
-            D = X
+            if type(X) == pd.DataFrame:
+                pass
+            else:
+                X = pd.DataFrame(X, columns=self.feature_labels)
+            X_df_onehot = BayesianRuleListClassifier.recode_samples_for_fpgrowth(X)
+            for c in X_df_onehot.columns:
+                X_df_onehot[c] = [c if x == 1 else '' for x in list(X_df_onehot[c])]
+            X2 = [{}] * (len(self.itemsets) + 1)
+            X2[0] = set(range(len(X_df_onehot)))  # the default rule satisfies all data
+            for (j, lhs) in enumerate(self.itemsets):
+                X2[j + 1] = set([i for (i, xi) in enumerate(X_df_onehot.values) if set(lhs).issubset(xi)])
 
-        # deal with pandas data
-        if type(D) in [pd.DataFrame, pd.Series]:
-            D = D.values
-
-        N = len(D)
-        X2 = self._to_itemset_indices(D[:])
+#         # deal with pandas data
+#         if type(D) in [pd.DataFrame, pd.Series]:
+#             D = D.values
+            
         P = preds_d_t(X2, np.zeros((N, 1), dtype=int), self.d_star, self.theta)
         return np.vstack((1 - P, P)).T
 
