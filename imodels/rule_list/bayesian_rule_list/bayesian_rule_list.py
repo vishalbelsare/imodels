@@ -235,15 +235,6 @@ class BayesianRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
             if j > 0:
                 X[j] = set([i for (i, xi) in enumerate(X_df_onehot.values) if set(lhs).issubset(xi)])
         return X
-    
-            # Now form the data-vs.-lhs set
-        # X[j] is the set of data points that contain itemset j (that is, satisfy rule j)
-        for c in X_df_onehot.columns:
-            X_df_onehot[c] = [c if x == 1 else '' for x in list(X_df_onehot[c])]
-        X = [{}] * (len(itemsets) + 1)
-        X[0] = set(range(len(X_df_onehot)))  # the default rule satisfies all data
-        for (j, lhs) in enumerate(itemsets):
-            X[j + 1] = set([i for (i, xi) in enumerate(X_df_onehot.values) if set(lhs).issubset(xi)])
 
     def predict_proba(self, X):
         """Compute probabilities of possible outcomes for samples in X.
@@ -271,10 +262,11 @@ class BayesianRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
             X_df_onehot = BayesianRuleListClassifier.recode_samples_for_fpgrowth(X)
             for c in X_df_onehot.columns:
                 X_df_onehot[c] = [c if x == 1 else '' for x in list(X_df_onehot[c])]
-            X2 = [{}] * (len(self.itemsets) + 1)
+            X2 = [set() for j in range(len(self.itemsets))]
             X2[0] = set(range(len(X_df_onehot)))  # the default rule satisfies all data
             for (j, lhs) in enumerate(self.itemsets):
-                X2[j + 1] = set([i for (i, xi) in enumerate(X_df_onehot.values) if set(lhs).issubset(xi)])
+                if j > 0:
+                    X2[j] = set([i for (i, xi) in enumerate(X_df_onehot.values) if set(lhs).issubset(xi)])
 
 #         # deal with pandas data
 #         if type(D) in [pd.DataFrame, pd.Series]:
