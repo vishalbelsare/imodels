@@ -1,8 +1,12 @@
 import numpy as np
 from sklearn.base import RegressorMixin, clone
-from sklearn.linear_model import LinearRegression
+try:
+    from sklearn.linear_model.base import LinearRegression
+except:
+    from sklearn.linear_model._base import LinearRegression
 
-from imodels.experimental.bartpy.sklearnmodel import SklearnModel
+
+from ..sklearnmodel import SklearnModel
 
 
 class ResidualBART(SklearnModel):

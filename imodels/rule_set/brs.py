@@ -3,6 +3,9 @@
 
 import itertools
 import operator
+import os
+import warnings
+from os.path import join as oj
 from bisect import bisect_left
 from collections import defaultdict
 from copy import deepcopy
@@ -13,6 +16,7 @@ import numpy as np
 import pandas as pd
 from mlxtend.frequent_patterns import fpgrowth
 from numpy.random import random
+from pandas import read_csv
 from scipy.sparse import csc_matrix
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.ensemble import RandomForestClassifier
@@ -20,6 +24,7 @@ from sklearn.utils.multiclass import check_classification_targets
 from sklearn.utils.validation import check_X_y, check_is_fitted
 
 from imodels.rule_set.rule_set import RuleSet
+from imodels.util.arguments import check_fit_arguments
 
 
 class BayesianRuleSetClassifier(RuleSet, BaseEstimator, ClassifierMixin):
@@ -97,17 +102,7 @@ class BayesianRuleSetClassifier(RuleSet, BaseEstimator, ClassifierMixin):
         self.attr_level_num = defaultdict(int)  # any missing value defaults to 0
         self.attr_names = []
 
-        # get feature names
-        if feature_names is None:
-            if isinstance(X, pd.DataFrame):
-                feature_names = X.columns
-            else:
-                feature_names = ['X' + str(i) for i in range(X.shape[1])]
-
-        # checks
-        X, y = check_X_y(X, y)  # converts df to ndarray
-        check_classification_targets(y)
-        assert len(feature_names) == X.shape[1], 'feature_names should be same size as X.shape[1]'
+        X, y, feature_names = check_fit_arguments(self, X, y, feature_names)
         np.random.seed(self.random_state)
 
         # convert to pandas DataFrame
@@ -120,12 +115,13 @@ class BayesianRuleSetClassifier(RuleSet, BaseEstimator, ClassifierMixin):
         self.attr_names = list(set(self.attr_names))
 
         # set up patterns
-        self.set_pattern_space()
+        self._set_pattern_space()
 
         # parameter checking
         if self.alpha_l is None or self.beta_l is None or len(self.alpha_l) != self.maxlen or len(
                 self.beta_l) != self.maxlen:
-            print('No or wrong input for alpha_l and beta_l - the model will use default parameters.')
+            if verbose:
+                print('No or wrong input for alpha_l and beta_l - the model will use default parameters.')
             self.C = [1.0 / self.maxlen] * self.maxlen
             self.C.insert(0, -1)
             self.alpha_l = [10] * (self.maxlen + 1)
@@ -135,7 +131,7 @@ class BayesianRuleSetClassifier(RuleSet, BaseEstimator, ClassifierMixin):
             self.beta_l = [1] + list(self.beta_l)
 
         # setup
-        self.generate_rules(X, y)
+        self._generate_rules(X, y, verbose)
         n_rules_current = len(self.rules_)
         self.rules_len_list = [len(rule) for rule in self.rules_]
         maps = defaultdict(list)
@@ -151,7 +147,7 @@ class BayesianRuleSetClassifier(RuleSet, BaseEstimator, ClassifierMixin):
                 assert n_rules_current > 1, f'Only {n_rules_current} potential rules found, change hyperparams to allow for more'
                 N = sample(range(1, min(8, n_rules_current), 1), 1)[0]
                 rules_curr = sample(range(n_rules_current), N)
-            rules_curr_norm = self.normalize(rules_curr)
+            rules_curr_norm = self._normalize(rules_curr)
             pt_curr = -100000000000
             maps[chain].append(
                 [-1, [pt_curr / 3, pt_curr / 3, pt_curr / 3], rules_curr, [self.rules_[i] for i in rules_curr]])
@@ -159,20 +155,23 @@ class BayesianRuleSetClassifier(RuleSet, BaseEstimator, ClassifierMixin):
             for iter in range(self.num_iterations):
                 if iter >= split:
                     p = np.array(range(1 + len(maps[chain])))
-                    p = np.array(list(accumulate(p)))
+                    p = np.array(list(_accumulate(p)))
                     p = p / p[-1]
-                    index = find_lt(p, random())
+                    index = _find_lt(p, random())
                     rules_curr = maps[chain][index][2].copy()
                     rules_curr_norm = maps[chain][index][2].copy()
 
                 # propose new rules
-                rules_new, rules_norm = self.propose(rules_curr.copy(), rules_curr_norm.copy(), self.q, y)
+                rules_new, rules_norm = self._propose(rules_curr.copy(), rules_curr_norm.copy(), self.q, y)
 
                 # compute probability of new rules
-                cfmatrix, prob = self.compute_prob(rules_new, y)
+                cfmatrix, prob = self._compute_prob(rules_new, y)
                 T = T0 ** (1 - iter / self.num_iterations)  # temperature for simulated annealing
                 pt_new = sum(prob)
-                alpha = np.exp(float(pt_new - pt_curr) / T)
+                with warnings.catch_warnings():
+                    if not verbose:
+                        warnings.simplefilter("ignore")
+                    alpha = np.exp(float(pt_new - pt_curr) / T)
 
                 if pt_new > sum(maps[chain][-1][1]):
                     maps[chain].append([iter, prob, rules_new, [self.rules_[i] for i in rules_new]])
@@ -183,7 +182,7 @@ class BayesianRuleSetClassifier(RuleSet, BaseEstimator, ClassifierMixin):
                             chain, iter, (cfmatrix[0] + cfmatrix[2] + 0.0) / len(y), cfmatrix[0], cfmatrix[1],
                             cfmatrix[2], cfmatrix[3], sum(prob), prob[0], prob[1], prob[2])
                         )
-                        self.print_rules(rules_new)
+                        self._print_rules(rules_new)
                         print(rules_new)
                 if random() <= alpha:
                     rules_curr_norm, rules_curr, pt_curr = rules_norm.copy(), rules_new.copy(), pt_new
@@ -213,7 +212,7 @@ class BayesianRuleSetClassifier(RuleSet, BaseEstimator, ClassifierMixin):
     def predict_proba(self, X):
         raise Exception('BOA does not support predicted probabilities.')
 
-    def set_pattern_space(self):
+    def _set_pattern_space(self):
         """Compute the rule space from the levels in each attribute
         """
         # add feat_neg to each existing feature feat
@@ -232,10 +231,10 @@ class BayesianRuleSetClassifier(RuleSet, BaseEstimator, ClassifierMixin):
                 # print('subset', subset, 'tmp', tmp, 'k', k)
                 self.pattern_space[k] = self.pattern_space[k] + tmp
 
-    def generate_rules(self, X, y):
-        '''This function generates rules that satisfy supp and maxlen using fpgrowth, then it selects the top n_rules rules that make data have the biggest decrease in entropy
-        there are two ways to generate rules. fpgrowth can handle cases where the maxlen is small. If maxlen<=3, fpgrowth can generates rules much faster than randomforest.
-        If maxlen is big, fpgrowh tends to generate too many rules that overflow the memories.
+    def _generate_rules(self, X, y, verbose):
+        '''This function generates rules that satisfy supp and maxlen using fpgrowth, then it selects the top n_rules rules that make data have the biggest decrease in entropy.
+        There are two ways to generate rules. fpgrowth can handle cases where the maxlen is small. If maxlen<=3, fpgrowth can generates rules much faster than randomforest.
+        If maxlen is big, fpgrowth tends to generate too many rules that overflow the memory.
         '''
 
         df = 1 - X  # df has negative associations
@@ -256,51 +255,61 @@ class BayesianRuleSetClassifier(RuleSet, BaseEstimator, ClassifierMixin):
                 clf = RandomForestClassifier(n_estimators=n_estimators, max_depth=length)
                 clf.fit(X, y)
                 for n in range(n_estimators):
-                    rules.extend(extract_rules(clf.estimators_[n], df.columns))
+                    rules.extend(_extract_rules(clf.estimators_[n], df.columns))
             rules = [list(x) for x in set(tuple(x) for x in rules)]
         self.rules_ = rules
 
         # select the top n_rules rules using secondary criteria, information gain
-        self.screen_rules(df, y)  # updates self.rules_
-        self.set_pattern_space()
+        self._screen_rules(df, y, verbose)  # updates self.rules_
+        self._set_pattern_space()
 
-    def screen_rules(self, df, y):
+    def _screen_rules(self, df, y, verbose):
         '''Screening rules using information gain
         '''
         item_ind_dict = {}
         for i, name in enumerate(df.columns):
             item_ind_dict[name] = i
         indices = np.array(
-            list(itertools.chain.from_iterable([[item_ind_dict[x] for x in rule] for rule in self.rules_])))
+            list(itertools.chain.from_iterable([[
+                item_ind_dict[x] for x in rule]
+                for rule in self.rules_])))
         len_rules = [len(rule) for rule in self.rules_]
-        indptr = list(accumulate(len_rules))
+        indptr = list(_accumulate(len_rules))
         indptr.insert(0, 0)
         indptr = np.array(indptr)
         data = np.ones(len(indices))
-        rule_matrix = csc_matrix((data, indices, indptr), shape=(len(df.columns), len(self.rules_)))
-        mat = np.matrix(df) @ rule_matrix
+        rule_matrix = csc_matrix((data, indices, indptr),
+                                 shape=(len(df.columns),
+                                        len(self.rules_)))
+        mat = df.values @ rule_matrix
+        print('mat.shape', mat.shape)
         len_matrix = np.array([len_rules] * df.shape[0])
         Z = (mat == len_matrix).astype(int)
         Zpos = [Z[i] for i in np.where(y > 0)][0]
-        TP = np.array(np.sum(Zpos, axis=0).tolist()[0])
+        TP = np.sum(Zpos, axis=0)
         supp_select = np.where(TP >= self.supp * sum(y) / 100)[0]
-        FP = np.array(np.sum(Z, axis=0))[0] - TP
+        FP = np.sum(Z, axis=0) - TP
         TN = len(y) - np.sum(y) - FP
         FN = np.sum(y) - TP
         p1 = TP.astype(float) / (TP + FP)
         p2 = FN.astype(float) / (FN + TN)
         pp = (TP + FP).astype(float) / (TP + FP + TN + FN)
-        cond_entropy = -pp * (p1 * np.log(p1) + (1 - p1) * np.log(1 - p1)) - (1 - pp) * (
-                p2 * np.log(p2) + (1 - p2) * np.log(1 - p2))
-        cond_entropy[p1 * (1 - p1) == 0] = -((1 - pp) * (p2 * np.log(p2) + (1 - p2) * np.log(1 - p2)))[
-            p1 * (1 - p1) == 0]
-        cond_entropy[p2 * (1 - p2) == 0] = -(pp * (p1 * np.log(p1) + (1 - p1) * np.log(1 - p1)))[p2 * (1 - p2) == 0]
-        cond_entropy[p1 * (1 - p1) * p2 * (1 - p2) == 0] = 0
+        # p1 = np.clip(p1, a_min=1e-10, a_max=1-1e-10)
+        print('\n\n\n\np1.shape', p1.shape, 'pp.shape', pp.shape, 'cond_entropy.shape')  # , cond_entropy.shape)
+        with warnings.catch_warnings():
+            if not verbose:
+                warnings.simplefilter("ignore")  # ignore warnings about invalid values (e.g. log(0))
+            cond_entropy = -pp * (p1 * np.log(p1) + (1 - p1) * np.log(1 - p1)) - (1 - pp) * (
+                    p2 * np.log(p2) + (1 - p2) * np.log(1 - p2))
+            cond_entropy[p1 * (1 - p1) == 0] = -((1 - pp) * (p2 * np.log(p2) + (1 - p2) * np.log(1 - p2)))[
+                p1 * (1 - p1) == 0]
+            cond_entropy[p2 * (1 - p2) == 0] = -(pp * (p1 * np.log(p1) + (1 - p1) * np.log(1 - p1)))[p2 * (1 - p2) == 0]
+            cond_entropy[p1 * (1 - p1) * p2 * (1 - p2) == 0] = 0
         select = np.argsort(cond_entropy[supp_select])[::-1][-self.n_rules:]
         self.rules_ = [self.rules_[i] for i in supp_select[select]]
         self.RMatrix = np.array(Z[:, supp_select[select]])
 
-    def propose(self, rules_curr, rules_norm, q, y):
+    def _propose(self, rules_curr, rules_norm, q, y):
         nRules = len(self.rules_)
         yhat = (np.sum(self.RMatrix[:, rules_curr], axis=1) > 0).astype(int)
         incorr = np.where(y != yhat)[0]
@@ -334,20 +343,20 @@ class BayesianRuleSetClassifier(RuleSet, BaseEstimator, ClassifierMixin):
                 all_sum = np.sum(self.RMatrix[:, rules_curr], axis=1)
                 for index, rule in enumerate(rules_curr):
                     yhat = ((all_sum - np.array(self.RMatrix[:, rule])) > 0).astype(int)
-                    TP, FP, TN, FN = get_confusion_matrix(yhat, y)
+                    TP, FP, TN, FN = _get_confusion_matrix(yhat, y)
                     p.append(TP.astype(float) / (TP + FP + 1))
                 p = [x - min(p) for x in p]
                 p = np.exp(p)
                 p = np.insert(p, 0, 0)
-                p = np.array(list(accumulate(p)))
+                p = np.array(list(_accumulate(p)))
                 if p[-1] == 0:
                     index = sample(range(len(rules_curr)), 1)[0]
                 else:
                     p = p / p[-1]
-                index = find_lt(p, random())
+                index = _find_lt(p, random())
                 cut_rule = rules_curr[index]
             rules_curr.remove(cut_rule)
-            rules_norm = self.normalize(rules_curr)
+            rules_norm = self._normalize(rules_curr)
             move.remove('cut')
 
         if len(move) > 0 and move[0] == 'add':
@@ -364,7 +373,7 @@ class BayesianRuleSetClassifier(RuleSet, BaseEstimator, ClassifierMixin):
                 add_rule = sample(np.where(p == max(p))[0].tolist(), 1)[0]
             if add_rule not in rules_curr:
                 rules_curr.append(add_rule)
-                rules_norm = self.normalize(rules_curr)
+                rules_norm = self._normalize(rules_curr)
 
         if len(move) > 0 and move[0] == 'clean':
             remove = []
@@ -372,7 +381,7 @@ class BayesianRuleSetClassifier(RuleSet, BaseEstimator, ClassifierMixin):
                 yhat = (np.sum(
                     self.RMatrix[:, [rule for j, rule in enumerate(rules_norm) if (j != i and j not in remove)]],
                     axis=1) > 0).astype(int)
-                TP, FP, TN, FN = get_confusion_matrix(yhat, y)
+                TP, FP, TN, FN = _get_confusion_matrix(yhat, y)
                 if TP + FP == 0:
                     remove.append(i)
             for x in remove:
@@ -380,17 +389,17 @@ class BayesianRuleSetClassifier(RuleSet, BaseEstimator, ClassifierMixin):
             return rules_curr, rules_norm
         return rules_curr, rules_norm
 
-    def compute_prob(self, rules, y):
+    def _compute_prob(self, rules, y):
         Yhat = (np.sum(self.RMatrix[:, rules], axis=1) > 0).astype(int)
-        TP, FP, TN, FN = get_confusion_matrix(Yhat, y)
+        TP, FP, TN, FN = _get_confusion_matrix(Yhat, y)
         Kn_count = list(np.bincount([self.rules_len_list[x] for x in rules], minlength=self.maxlen + 1))
-        prior_ChsRules = sum([log_betabin(Kn_count[i], self.pattern_space[i], self.alpha_l[i], self.beta_l[i]) for i in
+        prior_ChsRules = sum([_log_betabin(Kn_count[i], self.pattern_space[i], self.alpha_l[i], self.beta_l[i]) for i in
                               range(1, len(Kn_count), 1)])
-        likelihood_1 = log_betabin(TP, TP + FP, self.alpha_pos, self.beta_pos)
-        likelihood_2 = log_betabin(TN, FN + TN, self.alpha_neg, self.beta_neg)
+        likelihood_1 = _log_betabin(TP, TP + FP, self.alpha_pos, self.beta_pos)
+        likelihood_2 = _log_betabin(TN, FN + TN, self.alpha_neg, self.beta_neg)
         return [TP, FP, TN, FN], [prior_ChsRules, likelihood_1, likelihood_2]
 
-    def normalize_add(self, rules_new, rule_index):
+    def _normalize_add(self, rules_new, rule_index):
         rules = rules_new.copy()
         for rule in rules_new:
             if set(self.rules_[rule]).issubset(self.rules_[rule_index]):
@@ -400,7 +409,7 @@ class BayesianRuleSetClassifier(RuleSet, BaseEstimator, ClassifierMixin):
         rules.append(rule_index)
         return rules
 
-    def normalize(self, rules_new):
+    def _normalize(self, rules_new):
         try:
             rules_len = [len(self.rules_[index]) for index in rules_new]
             rules = [rules_new[i] for i in np.argsort(rules_len)[::-1][:len(rules_len)]]
@@ -416,15 +425,15 @@ class BayesianRuleSetClassifier(RuleSet, BaseEstimator, ClassifierMixin):
         except:
             return rules_new.copy()
 
-    def print_rules(self, rules_max):
+    def _print_rules(self, rules_max):
         for rule_index in rules_max:
             print(self.rules_[rule_index])
 
 
-def accumulate(iterable, func=operator.add):
+def _accumulate(iterable, func=operator.add):
     '''Return running totals
-    Ex. accumulate([1,2,3,4,5]) --> 1 3 6 10 15
-    Ex. accumulate([1,2,3,4,5], operator.mul) --> 1 2 6 24 120
+    Ex. _accumulate([1,2,3,4,5]) --> 1 3 6 10 15
+    Ex. _accumulate([1,2,3,4,5], operator.mul) --> 1 2 6 24 120
     '''
     it = iter(iterable)
     total = next(it)
@@ -434,23 +443,23 @@ def accumulate(iterable, func=operator.add):
         yield total
 
 
-def find_lt(a, x):
+def _find_lt(a, x):
     """ Find rightmost value less than x"""
     i = bisect_left(a, x)
     if i:
         return int(i - 1)
-    print('in find_lt,{}'.format(a))
+    print('in _find_lt,{}'.format(a))
     raise ValueError
 
 
-def log_gampoiss(k, alpha, beta):
+def _log_gampoiss(k, alpha, beta):
     import math
     k = int(k)
     return math.lgamma(k + alpha) + alpha * np.log(beta) - math.lgamma(alpha) - math.lgamma(k + 1) - (
             alpha + k) * np.log(1 + beta)
 
 
-def log_betabin(k, n, alpha, beta):
+def _log_betabin(k, n, alpha, beta):
     import math
     try:
         const = math.lgamma(alpha + beta) - math.lgamma(alpha) - math.lgamma(beta)
@@ -468,7 +477,7 @@ def log_betabin(k, n, alpha, beta):
         return math.lgamma(k + alpha) + math.lgamma(n - k + beta) - math.lgamma(n + alpha + beta) + const
 
 
-def get_confusion_matrix(Yhat, Y):
+def _get_confusion_matrix(Yhat, Y):
     if len(Yhat) != len(Y):
         raise NameError('Yhat has different length')
     TP = np.dot(np.array(Y), np.array(Yhat))
@@ -478,7 +487,7 @@ def get_confusion_matrix(Yhat, Y):
     return TP, FP, TN, FN
 
 
-def extract_rules(tree, feature_names):
+def _extract_rules(tree, feature_names):
     left = tree.tree_.children_left
     right = tree.tree_.children_right
     features = [feature_names[i] for i in tree.tree_.feature]
@@ -486,7 +495,7 @@ def extract_rules(tree, feature_names):
     # get ids of child nodes
     idx = np.argwhere(left == -1)[:, 0]
 
-    def recurse(left, right, child, lineage=None):
+    def _recurse(left, right, child, lineage=None):
         if lineage is None:
             lineage = []
         if child in left:
@@ -501,12 +510,51 @@ def extract_rules(tree, feature_names):
             lineage.reverse()
             return lineage
         else:
-            return recurse(left, right, parent, lineage)
+            return _recurse(left, right, parent, lineage)
 
     rules = []
     for child in idx:
         rule = []
-        for node in recurse(left, right, child):
+        for node in _recurse(left, right, child):
             rule.append(node)
         rules.append(rule)
     return rules
+
+
+if __name__ == '__main__':
+    test_dir = os.path.dirname(os.path.abspath(__file__))
+
+    df = read_csv(oj(test_dir, '../../tests/test_data', 'tictactoe_X.txt'), header=0, sep=" ")
+    Y = np.loadtxt(open(oj(test_dir, '../../tests/test_data', 'tictactoe_Y.txt'), "rb"), delimiter=" ")
+
+    lenY = len(Y)
+    idxs_train = sample(range(lenY), int(0.50 * lenY))
+    idxs_test = [i for i in range(lenY) if i not in idxs_train]
+    y_test = Y[idxs_test]
+    model = BayesianRuleSetClassifier(n_rules=100,
+                                      supp=5,
+                                      maxlen=3,
+                                      num_iterations=100,
+                                      num_chains=2,
+                                      alpha_pos=500, beta_pos=1,
+                                      alpha_neg=500, beta_neg=1,
+                                      alpha_l=None, beta_l=None)
+
+    # fit and check accuracy
+    np.random.seed(13)
+    # random.seed(13)
+    model.fit(df.iloc[idxs_train], Y[idxs_train])
+    y_pred = model.predict(df.iloc[idxs_test])
+    acc1 = np.mean(y_pred == y_test)
+    assert acc1 > 0.8
+
+    # try fitting np version
+    np.random.seed(13)
+    # random.seed(13)
+    model.fit(df.iloc[idxs_train].values, Y[idxs_train])
+    y_pred = model.predict(df.iloc[idxs_test].values)
+    y_test = Y[idxs_test]
+    acc2 = np.mean(y_pred == y_test)
+    assert acc2 > 0.8
+
+    # assert np.abs(acc1 - acc2) < 0.05 # todo: fix seeding

@@ -8,22 +8,22 @@ import pandas as pd
 import scipy.stats
 from joblib import Parallel, delayed
 from sklearn.base import RegressorMixin, BaseEstimator
+from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import cross_val_score
 from sklearn.tree import DecisionTreeClassifier
 from sklearn import datasets, model_selection
 
-from imodels.experimental.bartpy.data import Data
-from imodels.experimental.bartpy.initializers.initializer import Initializer
-from imodels.experimental.bartpy.initializers.sklearntreeinitializer import SklearnTreeInitializer
-from imodels.experimental.bartpy.model import Model
-from imodels.experimental.bartpy.node import LeafNode, DecisionNode
-from imodels.experimental.bartpy.samplers.leafnode import LeafNodeSampler
-from imodels.experimental.bartpy.samplers.modelsampler import ModelSampler, Chain
-from imodels.experimental.bartpy.samplers.schedule import SampleSchedule
-from imodels.experimental.bartpy.samplers.sigma import SigmaSampler
-from imodels.experimental.bartpy.samplers.treemutation import TreeMutationSampler
-from imodels.experimental.bartpy.samplers.unconstrainedtree.treemutation import get_tree_sampler
-from imodels.experimental.bartpy.sigma import Sigma
+from .data import Data
+from .initializers.initializer import Initializer
+from .model import Model
+from .node import LeafNode, DecisionNode
+from .samplers.leafnode import LeafNodeSampler
+from .samplers.modelsampler import ModelSampler, Chain
+from .samplers.schedule import SampleSchedule
+from .samplers.sigma import SigmaSampler
+from .samplers.treemutation import TreeMutationSampler
+from .samplers.unconstrainedtree.treemutation import get_tree_sampler
+from .sigma import Sigma
 
 
 def run_chain(model: 'SklearnModel', X: np.ndarray, y: np.ndarray):
@@ -202,7 +202,8 @@ class SklearnModel(BaseEstimator, RegressorMixin):
                  tree_sampler: TreeMutationSampler = get_tree_sampler(0.5, 0.5),
                  initializer: Optional[Initializer] = None,
                  n_jobs=-1,
-                 classification: bool = False):
+                 classification: bool = False,
+                 max_rules=None):
         self.n_trees = n_trees
         self.n_chains = n_chains
         self.sigma_a = sigma_a
@@ -223,6 +224,7 @@ class SklearnModel(BaseEstimator, RegressorMixin):
         self.schedule = SampleSchedule(self.tree_sampler, LeafNodeSampler(), SigmaSampler())
         self.sampler = ModelSampler(self.schedule)
         self.classification = classification
+        self.max_rules = max_rules
 
         self.sigma, self.data, self.model, self._prediction_samples, self._model_samples, self.extract = [None] * 6
 
@@ -248,6 +250,9 @@ class SklearnModel(BaseEstimator, RegressorMixin):
         self._model_samples, self._prediction_samples = self.combined_chains["model"], self.combined_chains[
             "in_sample_predictions"]
         self._acceptance_trace = self.combined_chains["acceptance"]
+        self._likelihood = self.combined_chains["likelihood"]
+        self._probs = self.combined_chains["probs"]
+
         self.fitted_ = True
         return self
 
@@ -256,6 +261,13 @@ class SklearnModel(BaseEstimator, RegressorMixin):
         if hasattr(self, "fitted_"):
             return self.fitted_
         return False
+
+    @property
+    def complexity_(self):
+        if hasattr(self.initializer, "_tree"):
+            estimator = self.initializer._tree
+            if hasattr(estimator, 'complexity_'):
+                return estimator.complexity_
 
     @staticmethod
     def _combine_chains(extract: List[Chain]) -> Chain:
@@ -285,6 +297,8 @@ class SklearnModel(BaseEstimator, RegressorMixin):
                            beta=self.beta,
                            initializer=self.initializer,
                            classification=self.classification)
+        n_trees = self.n_trees if self.initializer is None else self.initializer.n_trees
+        self.n_trees = n_trees
         return self.model
 
     def f_delayed_chains(self, X: np.ndarray, y: np.ndarray):
@@ -348,8 +362,8 @@ class SklearnModel(BaseEstimator, RegressorMixin):
             return predictions
 
     def predict_proba(self, X: np.ndarray = None) -> np.ndarray:
-        return self._out_of_sample_predict(X)
-
+        preds = self._out_of_sample_predict(X)
+        return np.stack([preds, 1 - preds], axis=1)
 
     def residuals(self, X=None, y=None) -> np.ndarray:
         """
@@ -408,6 +422,45 @@ class SklearnModel(BaseEstimator, RegressorMixin):
         """
         return np.sqrt(np.sum(self.l2_error(X, y)))
 
+    def _chain_pred_arr(self, X, chain_number):
+        chain_len = int(self.n_samples)
+        samples_chain = self._model_samples[chain_number * chain_len: (chain_number + 1) * chain_len]
+        predictions_transformed = [x.predict(X) for x in samples_chain]
+        return predictions_transformed
+
+    def predict_chain(self, X, chain_number):
+        predictions_transformed = self._chain_pred_arr(X, chain_number)
+        predictions = self.data.y.unnormalize_y(np.mean(predictions_transformed, axis=0))
+        if self.classification:
+            predictions = scipy.stats.norm.cdf(predictions)
+        return predictions
+
+    def chain_mse_std(self, X, y, chain_number):
+        predictions_transformed = self._chain_pred_arr(X, chain_number)
+        predictions_std = np.std(
+            [mean_squared_error(self.data.y.unnormalize_y(preds), y) for preds in predictions_transformed])
+        return predictions_std
+
+    def chain_predictions(self, X, chain_number):
+        predictions_transformed = self._chain_pred_arr(X, chain_number)
+        preds_arr = [self.data.y.unnormalize_y(preds) for preds in predictions_transformed]
+        return preds_arr
+
+    def between_chains_var(self, X):
+        all_predictions = np.stack([self.data.y.unnormalize_y(x.predict(X)) for x in self._model_samples], axis=1)
+
+        def _get_var(preds_arr):
+            mean_pred = preds_arr.mean(axis=1)
+            var = np.mean((preds_arr - np.expand_dims(mean_pred, 1)) ** 2)
+            return var
+
+        total_var = _get_var(all_predictions)
+        within_chain_var = 0
+        for c in range(self.n_chains):
+            chain_preds = self._chain_pred_arr(X, c)
+            within_chain_var += _get_var(np.stack(chain_preds, axis=1))
+        return total_var - within_chain_var
+
     def _out_of_sample_predict(self, X):
         samples = self._model_samples
         predictions_transformed = [x.predict(X) for x in samples]
@@ -452,6 +505,32 @@ class SklearnModel(BaseEstimator, RegressorMixin):
         List[Mapping[str, float]]
         """
         return self._acceptance_trace
+
+    @property
+    def likelihood(self) -> List:
+        """
+        List of Mappings from variable name to likelihood
+
+        Each entry is the acceptance rate of the variable in each iteration of the model
+
+        Returns
+        -------
+        List[Mapping[str, float]]
+        """
+        return self._likelihood
+
+    @property
+    def probs(self) -> List:
+        """
+        List of Mappings from variable name to likelihood
+
+        Each entry is the acceptance rate of the variable in each iteration of the model
+
+        Returns
+        -------
+        List[Mapping[str, float]]
+        """
+        return self._probs
 
     @property
     def prediction_samples(self) -> np.ndarray:
@@ -693,6 +772,7 @@ def main():
     # #
     # # plt.close()
     #
+
 
 if __name__ == '__main__':
     main()

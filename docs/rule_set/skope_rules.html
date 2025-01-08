@@ -4,9 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1" />
 <meta name="generator" content="pdoc 0.10.0" />
-<title>imodels.rule_set.skope_rules API documentation</title>
-<meta name="description" content="Skope-rules aims at learning logical, interpretable rules for &#34;scoping&#34; a target
-class, i.e. detecting with high precision instances of this class …" />
 <link rel="preload stylesheet" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/11.0.1/sanitize.min.css" integrity="sha256-PK9q560IAAa6WVRRh76LtCaI8pjTJ2z11v0miyNNjrs=" crossorigin>
 <link rel="preload stylesheet" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/11.0.1/typography.min.css" integrity="sha256-7l/o7C8jubJiy74VsKTidCy1yBkRtiUGbVkYBylBqUg=" crossorigin>
 <link rel="stylesheet preload" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/10.1.1/styles/github.min.css" crossorigin>
@@ -19,9 +16,6 @@ class, i.e. detecting with high precision instances of this class …" />
 <body>
 <main>
 <article id="content">
-<header>
-<h1 class="title">Module <code>imodels.rule_set.skope_rules</code></h1>
-</header>
 <section id="section-intro">
 <p>Skope-rules aims at learning logical, interpretable rules for "scoping" a target
 class, i.e. detecting with high precision instances of this class.</p>
@@ -46,7 +40,7 @@ X, y = dataset.data, dataset.target &gt; 25
 X_train, y_train = X[:len(y)//2], y[:len(y)//2]
 X_test, y_test = X[len(y)//2:], y[len(y)//2:]
 clf.fit(X_train, y_train)
-y_score = clf.score_top_rules(X_test) # Get a risk score for each test example
+y_score = clf._score_top_rules(X_test) # Get a risk score for each test example
 precision, recall, _ = precision_recall_curve(y_test, y_score)
 plt.plot(recall, precision)
 plt.xlabel('Recall')
@@ -70,8 +64,8 @@ similar or duplicated rules are then removed, based on a similarity threshold of
 <p>The main goal of this package is to provide rules verifying precision and recall conditions. It still implement a score
 (<code>decision_function</code>) method, but which does not solve the L1-regularized optimization problem as in [1]. Instead,
 weights are simply proportional to the OOB associated precision of the rule.</p>
-<p>This package also offers convenient methods to compute predictions with the k most precise rules (cf score_top_rules()
-and predict_top_rules() functions).</p>
+<p>This package also offers convenient methods to compute predictions with the k most precise rules (cf _score_top_rules()
+and _predict_top_rules() functions).</p>
 <p>[1] Friedman and Popescu, Predictive learning via rule ensembles,Technical Report, 2005.</p>
 <p>[2] Cohen and Singer, A simple, fast, and effective rule learner, National Conference on Artificial Intelligence, 1999.</p>
 <p>[3] Weiss and Indurkhya, Lightweight rule induction, ICML, 2000.</p>
@@ -109,7 +103,7 @@ Example
     X_train, y_train = X[:len(y)//2], y[:len(y)//2]
     X_test, y_test = X[len(y)//2:], y[len(y)//2:]
     clf.fit(X_train, y_train)
-    y_score = clf.score_top_rules(X_test) # Get a risk score for each test example
+    y_score = clf._score_top_rules(X_test) # Get a risk score for each test example
     precision, recall, _ = precision_recall_curve(y_test, y_score)
     plt.plot(recall, precision)
     plt.xlabel(&#39;Recall&#39;)
@@ -141,8 +135,8 @@ The main goal of this package is to provide rules verifying precision and recall
 (`decision_function`) method, but which does not solve the L1-regularized optimization problem as in [1]. Instead,
 weights are simply proportional to the OOB associated precision of the rule.
 
-This package also offers convenient methods to compute predictions with the k most precise rules (cf score_top_rules()
-and predict_top_rules() functions).
+This package also offers convenient methods to compute predictions with the k most precise rules (cf _score_top_rules()
+and _predict_top_rules() functions).
 
 
 [1] Friedman and Popescu, Predictive learning via rule ensembles,Technical Report, 2005.
@@ -167,6 +161,7 @@ from sklearn.utils.multiclass import check_classification_targets, unique_labels
 from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 
 from imodels.rule_set.rule_set import RuleSet
+from imodels.util.arguments import check_fit_arguments
 from imodels.util.rule import replace_feature_name, get_feature_dict, Rule
 from imodels.util.extract import extract_skope
 from imodels.util.score import score_precision_recall
@@ -349,7 +344,7 @@ class SkopeRulesClassifier(BaseEstimator, RuleSet, ClassifierMixin):
         self : object
             Returns self.
         &#34;&#34;&#34;
-        X, y = check_X_y(X, y)
+        X, y, feature_names = check_fit_arguments(self, X, y, feature_names)
         check_classification_targets(y)
         self.n_features_ = X.shape[1]
         self.sample_weight = sample_weight
@@ -439,10 +434,10 @@ class SkopeRulesClassifier(BaseEstimator, RuleSet, ClassifierMixin):
         weight_sum = np.sum([w[0] for (r, w) in self.rules_without_feature_names_])
         if weight_sum == 0:
             return np.vstack((np.ones(X.shape[0]), np.zeros(X.shape[0]))).transpose()
-        y = self.eval_weighted_rule_sum(X) / weight_sum
+        y = self._eval_weighted_rule_sum(X) / weight_sum
         return np.vstack((1 - y, y)).transpose()
 
-    def rules_vote(self, X) -&gt; np.ndarray:
+    def _rules_vote(self, X) -&gt; np.ndarray:
         &#34;&#34;&#34;Score representing a vote of the base classifiers (rules).
 
         The score of an input sample is computed as the sum of the binary
@@ -482,7 +477,7 @@ class SkopeRulesClassifier(BaseEstimator, RuleSet, ClassifierMixin):
 
         return scores
 
-    def score_top_rules(self, X) -&gt; np.ndarray:
+    def _score_top_rules(self, X) -&gt; np.ndarray:
         &#34;&#34;&#34;Score representing an ordering between the base classifiers (rules).
 
         The score is high when the instance is detected by a performing rule.
@@ -525,7 +520,7 @@ class SkopeRulesClassifier(BaseEstimator, RuleSet, ClassifierMixin):
 
         return scores
 
-    def predict_top_rules(self, X, n_rules) -&gt; np.ndarray:
+    def _predict_top_rules(self, X, n_rules) -&gt; np.ndarray:
         &#34;&#34;&#34;Predict if a particular sample is an outlier or not,
         using the n_rules most performing rules.
 
@@ -547,7 +542,7 @@ class SkopeRulesClassifier(BaseEstimator, RuleSet, ClassifierMixin):
             be considered as an outlier according to the selected rules.
         &#34;&#34;&#34;
 
-        return np.array((self.score_top_rules(X) &gt; len(self.rules_) - n_rules),
+        return np.array((self._score_top_rules(X) &gt; len(self.rules_) - n_rules),
                         dtype=int)
 
     def _extract_rules(self, X, y) -&gt; Tuple[List[str], List[np.array], List[np.array]]:
@@ -868,7 +863,7 @@ estimator.</dd>
         self : object
             Returns self.
         &#34;&#34;&#34;
-        X, y = check_X_y(X, y)
+        X, y, feature_names = check_fit_arguments(self, X, y, feature_names)
         check_classification_targets(y)
         self.n_features_ = X.shape[1]
         self.sample_weight = sample_weight
@@ -958,10 +953,10 @@ estimator.</dd>
         weight_sum = np.sum([w[0] for (r, w) in self.rules_without_feature_names_])
         if weight_sum == 0:
             return np.vstack((np.ones(X.shape[0]), np.zeros(X.shape[0]))).transpose()
-        y = self.eval_weighted_rule_sum(X) / weight_sum
+        y = self._eval_weighted_rule_sum(X) / weight_sum
         return np.vstack((1 - y, y)).transpose()
 
-    def rules_vote(self, X) -&gt; np.ndarray:
+    def _rules_vote(self, X) -&gt; np.ndarray:
         &#34;&#34;&#34;Score representing a vote of the base classifiers (rules).
 
         The score of an input sample is computed as the sum of the binary
@@ -1001,7 +996,7 @@ estimator.</dd>
 
         return scores
 
-    def score_top_rules(self, X) -&gt; np.ndarray:
+    def _score_top_rules(self, X) -&gt; np.ndarray:
         &#34;&#34;&#34;Score representing an ordering between the base classifiers (rules).
 
         The score is high when the instance is detected by a performing rule.
@@ -1044,7 +1039,7 @@ estimator.</dd>
 
         return scores
 
-    def predict_top_rules(self, X, n_rules) -&gt; np.ndarray:
+    def _predict_top_rules(self, X, n_rules) -&gt; np.ndarray:
         &#34;&#34;&#34;Predict if a particular sample is an outlier or not,
         using the n_rules most performing rules.
 
@@ -1066,7 +1061,7 @@ estimator.</dd>
             be considered as an outlier according to the selected rules.
         &#34;&#34;&#34;
 
-        return np.array((self.score_top_rules(X) &gt; len(self.rules_) - n_rules),
+        return np.array((self._score_top_rules(X) &gt; len(self.rules_) - n_rules),
                         dtype=int)
 
     def _extract_rules(self, X, y) -&gt; Tuple[List[str], List[np.array], List[np.array]]:
@@ -1097,6 +1092,8 @@ estimator.</dd>
 <h3>Ancestors</h3>
 <ul class="hlist">
 <li>sklearn.base.BaseEstimator</li>
+<li>sklearn.utils._estimator_html_repr._HTMLDocumentationLinkMixin</li>
+<li>sklearn.utils._metadata_requests._MetadataRequester</li>
 <li><a title="imodels.rule_set.rule_set.RuleSet" href="rule_set.html#imodels.rule_set.rule_set.RuleSet">RuleSet</a></li>
 <li>sklearn.base.ClassifierMixin</li>
 </ul>
@@ -1159,7 +1156,7 @@ If not provided, then each sample is given unit weight.</dd>
     self : object
         Returns self.
     &#34;&#34;&#34;
-    X, y = check_X_y(X, y)
+    X, y, feature_names = check_fit_arguments(self, X, y, feature_names)
     check_classification_targets(y)
     self.n_features_ = X.shape[1]
     self.sample_weight = sample_weight
@@ -1281,192 +1278,207 @@ be considered as an outlier according to the selected rules.</dd>
     weight_sum = np.sum([w[0] for (r, w) in self.rules_without_feature_names_])
     if weight_sum == 0:
         return np.vstack((np.ones(X.shape[0]), np.zeros(X.shape[0]))).transpose()
-    y = self.eval_weighted_rule_sum(X) / weight_sum
+    y = self._eval_weighted_rule_sum(X) / weight_sum
     return np.vstack((1 - y, y)).transpose()</code></pre>
 </details>
 </dd>
-<dt id="imodels.rule_set.skope_rules.SkopeRulesClassifier.predict_top_rules"><code class="name flex">
-<span>def <span class="ident">predict_top_rules</span></span>(<span>self, X, n_rules) ‑> numpy.ndarray</span>
+<dt id="imodels.rule_set.skope_rules.SkopeRulesClassifier.set_fit_request"><code class="name flex">
+<span>def <span class="ident">set_fit_request</span></span>(<span>self: <a title="imodels.rule_set.skope_rules.SkopeRulesClassifier" href="#imodels.rule_set.skope_rules.SkopeRulesClassifier">SkopeRulesClassifier</a>, *, feature_names: Union[bool, ForwardRef(None), str] = '$UNCHANGED$', sample_weight: Union[bool, ForwardRef(None), str] = '$UNCHANGED$') ‑> <a title="imodels.rule_set.skope_rules.SkopeRulesClassifier" href="#imodels.rule_set.skope_rules.SkopeRulesClassifier">SkopeRulesClassifier</a></span>
 </code></dt>
 <dd>
-<div class="desc"><p>Predict if a particular sample is an outlier or not,
-using the n_rules most performing rules.</p>
+<div class="desc"><p>Request metadata passed to the <code>fit</code> method.</p>
+<p>Note that this method is only relevant if
+<code>enable_metadata_routing=True</code> (see :func:<code>sklearn.set_config</code>).
+Please see :ref:<code>User Guide &lt;metadata_routing&gt;</code> on how the routing
+mechanism works.</p>
+<p>The options for each parameter are:</p>
+<ul>
+<li>
+<p><code>True</code>: metadata is requested, and passed to <code>fit</code> if provided. The request is ignored if metadata is not provided.</p>
+</li>
+<li>
+<p><code>False</code>: metadata is not requested and the meta-estimator will not pass it to <code>fit</code>.</p>
+</li>
+<li>
+<p><code>None</code>: metadata is not requested, and the meta-estimator will raise an error if the user provides it.</p>
+</li>
+<li>
+<p><code>str</code>: metadata should be passed to the meta-estimator with this given alias instead of the original name.</p>
+</li>
+</ul>
+<p>The default (<code>sklearn.utils.metadata_routing.UNCHANGED</code>) retains the
+existing request. This allows you to change the request for some
+parameters and not others.</p>
+<div class="admonition versionadded">
+<p class="admonition-title">Added in version:&ensp;1.3</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This method is only relevant if this estimator is used as a
+sub-estimator of a meta-estimator, e.g. used inside a
+:class:<code>~sklearn.pipeline.Pipeline</code>. Otherwise it has no effect.</p>
+</div>
 <h2 id="parameters">Parameters</h2>
 <dl>
-<dt><strong><code>X</code></strong> :&ensp;<code>array-like, shape (n_samples, n_features)</code></dt>
-<dd>The input samples. Internally, it will be converted to
-<code>dtype=np.float32</code></dd>
-<dt><strong><code>n_rules</code></strong> :&ensp;<code>int</code></dt>
-<dd>The number of rules used for the prediction. If one of the
-n_rules most performing rules is activated, the prediction
-is equal to 1.</dd>
+<dt><strong><code>feature_names</code></strong> :&ensp;<code>str, True, False,</code> or <code>None</code>,
+default=<code>sklearn.utils.metadata_routing.UNCHANGED</code></dt>
+<dd>Metadata routing for <code>feature_names</code> parameter in <code>fit</code>.</dd>
+<dt><strong><code>sample_weight</code></strong> :&ensp;<code>str, True, False,</code> or <code>None</code>,
+default=<code>sklearn.utils.metadata_routing.UNCHANGED</code></dt>
+<dd>Metadata routing for <code>sample_weight</code> parameter in <code>fit</code>.</dd>
 </dl>
 <h2 id="returns">Returns</h2>
 <dl>
-<dt><strong><code>is_outlier</code></strong> :&ensp;<code>array, shape (n_samples,)</code></dt>
-<dd>For each observations, tells whether or not (1 or 0) it should
-be considered as an outlier according to the selected rules.</dd>
+<dt><strong><code>self</code></strong> :&ensp;<code>object</code></dt>
+<dd>The updated object.</dd>
 </dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def predict_top_rules(self, X, n_rules) -&gt; np.ndarray:
-    &#34;&#34;&#34;Predict if a particular sample is an outlier or not,
-    using the n_rules most performing rules.
+<pre><code class="python">def func(*args, **kw):
+    &#34;&#34;&#34;Updates the request for provided parameters
 
-    Parameters
-    ----------
-    X : array-like, shape (n_samples, n_features)
-        The input samples. Internally, it will be converted to
-        ``dtype=np.float32``
-
-    n_rules : int
-        The number of rules used for the prediction. If one of the
-        n_rules most performing rules is activated, the prediction
-        is equal to 1.
-
-    Returns
-    -------
-    is_outlier : array, shape (n_samples,)
-        For each observations, tells whether or not (1 or 0) it should
-        be considered as an outlier according to the selected rules.
+    This docstring is overwritten below.
+    See REQUESTER_DOC for expected functionality
     &#34;&#34;&#34;
+    if not _routing_enabled():
+        raise RuntimeError(
+            &#34;This method is only available when metadata routing is enabled.&#34;
+            &#34; You can enable it using&#34;
+            &#34; sklearn.set_config(enable_metadata_routing=True).&#34;
+        )
 
-    return np.array((self.score_top_rules(X) &gt; len(self.rules_) - n_rules),
-                    dtype=int)</code></pre>
+    if self.validate_keys and (set(kw) - set(self.keys)):
+        raise TypeError(
+            f&#34;Unexpected args: {set(kw) - set(self.keys)} in {self.name}. &#34;
+            f&#34;Accepted arguments are: {set(self.keys)}&#34;
+        )
+
+    # This makes it possible to use the decorated method as an unbound method,
+    # for instance when monkeypatching.
+    # https://github.com/scikit-learn/scikit-learn/issues/28632
+    if instance is None:
+        _instance = args[0]
+        args = args[1:]
+    else:
+        _instance = instance
+
+    # Replicating python&#39;s behavior when positional args are given other than
+    # `self`, and `self` is only allowed if this method is unbound.
+    if args:
+        raise TypeError(
+            f&#34;set_{self.name}_request() takes 0 positional argument but&#34;
+            f&#34; {len(args)} were given&#34;
+        )
+
+    requests = _instance._get_metadata_request()
+    method_metadata_request = getattr(requests, self.name)
+
+    for prop, alias in kw.items():
+        if alias is not UNCHANGED:
+            method_metadata_request.add_request(param=prop, alias=alias)
+    _instance._metadata_request = requests
+
+    return _instance</code></pre>
 </details>
 </dd>
-<dt id="imodels.rule_set.skope_rules.SkopeRulesClassifier.rules_vote"><code class="name flex">
-<span>def <span class="ident">rules_vote</span></span>(<span>self, X) ‑> numpy.ndarray</span>
+<dt id="imodels.rule_set.skope_rules.SkopeRulesClassifier.set_score_request"><code class="name flex">
+<span>def <span class="ident">set_score_request</span></span>(<span>self: <a title="imodels.rule_set.skope_rules.SkopeRulesClassifier" href="#imodels.rule_set.skope_rules.SkopeRulesClassifier">SkopeRulesClassifier</a>, *, sample_weight: Union[bool, ForwardRef(None), str] = '$UNCHANGED$') ‑> <a title="imodels.rule_set.skope_rules.SkopeRulesClassifier" href="#imodels.rule_set.skope_rules.SkopeRulesClassifier">SkopeRulesClassifier</a></span>
 </code></dt>
 <dd>
-<div class="desc"><p>Score representing a vote of the base classifiers (rules).</p>
-<p>The score of an input sample is computed as the sum of the binary
-rules outputs: a score of k means than k rules have voted positively.</p>
+<div class="desc"><p>Request metadata passed to the <code>score</code> method.</p>
+<p>Note that this method is only relevant if
+<code>enable_metadata_routing=True</code> (see :func:<code>sklearn.set_config</code>).
+Please see :ref:<code>User Guide &lt;metadata_routing&gt;</code> on how the routing
+mechanism works.</p>
+<p>The options for each parameter are:</p>
+<ul>
+<li>
+<p><code>True</code>: metadata is requested, and passed to <code>score</code> if provided. The request is ignored if metadata is not provided.</p>
+</li>
+<li>
+<p><code>False</code>: metadata is not requested and the meta-estimator will not pass it to <code>score</code>.</p>
+</li>
+<li>
+<p><code>None</code>: metadata is not requested, and the meta-estimator will raise an error if the user provides it.</p>
+</li>
+<li>
+<p><code>str</code>: metadata should be passed to the meta-estimator with this given alias instead of the original name.</p>
+</li>
+</ul>
+<p>The default (<code>sklearn.utils.metadata_routing.UNCHANGED</code>) retains the
+existing request. This allows you to change the request for some
+parameters and not others.</p>
+<div class="admonition versionadded">
+<p class="admonition-title">Added in version:&ensp;1.3</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This method is only relevant if this estimator is used as a
+sub-estimator of a meta-estimator, e.g. used inside a
+:class:<code>~sklearn.pipeline.Pipeline</code>. Otherwise it has no effect.</p>
+</div>
 <h2 id="parameters">Parameters</h2>
 <dl>
-<dt><strong><code>X</code></strong> :&ensp;<code>array-like, shape (n_samples, n_features)</code></dt>
-<dd>The training input samples.</dd>
+<dt><strong><code>sample_weight</code></strong> :&ensp;<code>str, True, False,</code> or <code>None</code>,
+default=<code>sklearn.utils.metadata_routing.UNCHANGED</code></dt>
+<dd>Metadata routing for <code>sample_weight</code> parameter in <code>score</code>.</dd>
 </dl>
 <h2 id="returns">Returns</h2>
 <dl>
-<dt><strong><code>scores</code></strong> :&ensp;<code>array, shape (n_samples,)</code></dt>
-<dd>The score of the input samples.
-The higher, the more abnormal. Positive scores represent outliers,
-null scores represent inliers.</dd>
+<dt><strong><code>self</code></strong> :&ensp;<code>object</code></dt>
+<dd>The updated object.</dd>
 </dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def rules_vote(self, X) -&gt; np.ndarray:
-    &#34;&#34;&#34;Score representing a vote of the base classifiers (rules).
+<pre><code class="python">def func(*args, **kw):
+    &#34;&#34;&#34;Updates the request for provided parameters
 
-    The score of an input sample is computed as the sum of the binary
-    rules outputs: a score of k means than k rules have voted positively.
-
-    Parameters
-    ----------
-    X : array-like, shape (n_samples, n_features)
-        The training input samples.
-
-    Returns
-    -------
-    scores : array, shape (n_samples,)
-        The score of the input samples.
-        The higher, the more abnormal. Positive scores represent outliers,
-        null scores represent inliers.
-
+    This docstring is overwritten below.
+    See REQUESTER_DOC for expected functionality
     &#34;&#34;&#34;
-    # Check if fit had been called
-    check_is_fitted(self, [&#39;rules_&#39;, &#39;estimators_samples_&#39;, &#39;max_samples_&#39;])
+    if not _routing_enabled():
+        raise RuntimeError(
+            &#34;This method is only available when metadata routing is enabled.&#34;
+            &#34; You can enable it using&#34;
+            &#34; sklearn.set_config(enable_metadata_routing=True).&#34;
+        )
 
-    # Input validation
-    X = check_array(X)
+    if self.validate_keys and (set(kw) - set(self.keys)):
+        raise TypeError(
+            f&#34;Unexpected args: {set(kw) - set(self.keys)} in {self.name}. &#34;
+            f&#34;Accepted arguments are: {set(self.keys)}&#34;
+        )
 
-    if X.shape[1] != self.n_features_:
-        raise ValueError(&#34;X.shape[1] = %d should be equal to %d, &#34;
-                         &#34;the number of features at training time.&#34;
-                         &#34; Please reshape your data.&#34;
-                         % (X.shape[1], self.n_features_))
+    # This makes it possible to use the decorated method as an unbound method,
+    # for instance when monkeypatching.
+    # https://github.com/scikit-learn/scikit-learn/issues/28632
+    if instance is None:
+        _instance = args[0]
+        args = args[1:]
+    else:
+        _instance = instance
 
-    df = pandas.DataFrame(X, columns=self.feature_placeholders)
-    selected_rules = self.rules_without_feature_names_
+    # Replicating python&#39;s behavior when positional args are given other than
+    # `self`, and `self` is only allowed if this method is unbound.
+    if args:
+        raise TypeError(
+            f&#34;set_{self.name}_request() takes 0 positional argument but&#34;
+            f&#34; {len(args)} were given&#34;
+        )
 
-    scores = np.zeros(X.shape[0])
-    for (r, _) in selected_rules:
-        scores[list(df.query(r).index)] += 1
+    requests = _instance._get_metadata_request()
+    method_metadata_request = getattr(requests, self.name)
 
-    return scores</code></pre>
-</details>
-</dd>
-<dt id="imodels.rule_set.skope_rules.SkopeRulesClassifier.score_top_rules"><code class="name flex">
-<span>def <span class="ident">score_top_rules</span></span>(<span>self, X) ‑> numpy.ndarray</span>
-</code></dt>
-<dd>
-<div class="desc"><p>Score representing an ordering between the base classifiers (rules).</p>
-<p>The score is high when the instance is detected by a performing rule.
-If there are n rules, ordered by increasing OOB precision, a score of k
-means than the kth rule has voted positively, but not the (k-1) first
-rules.</p>
-<h2 id="parameters">Parameters</h2>
-<dl>
-<dt><strong><code>X</code></strong> :&ensp;<code>array-like, shape (n_samples, n_features)</code></dt>
-<dd>The training input samples.</dd>
-</dl>
-<h2 id="returns">Returns</h2>
-<dl>
-<dt><strong><code>scores</code></strong> :&ensp;<code>array, shape (n_samples,)</code></dt>
-<dd>The score of the input samples.
-Positive scores represent outliers, null scores represent inliers.</dd>
-</dl></div>
-<details class="source">
-<summary>
-<span>Expand source code</span>
-</summary>
-<pre><code class="python">def score_top_rules(self, X) -&gt; np.ndarray:
-    &#34;&#34;&#34;Score representing an ordering between the base classifiers (rules).
+    for prop, alias in kw.items():
+        if alias is not UNCHANGED:
+            method_metadata_request.add_request(param=prop, alias=alias)
+    _instance._metadata_request = requests
 
-    The score is high when the instance is detected by a performing rule.
-    If there are n rules, ordered by increasing OOB precision, a score of k
-    means than the kth rule has voted positively, but not the (k-1) first
-    rules.
-
-    Parameters
-    ----------
-    X : array-like, shape (n_samples, n_features)
-        The training input samples.
-
-    Returns
-    -------
-    scores : array, shape (n_samples,)
-        The score of the input samples.
-        Positive scores represent outliers, null scores represent inliers.
-
-    &#34;&#34;&#34;
-    # Check if fit had been called
-    check_is_fitted(self, [&#39;rules_&#39;, &#39;estimators_samples_&#39;, &#39;max_samples_&#39;])
-
-    # Input validation
-    X = check_array(X)
-
-    if X.shape[1] != self.n_features_:
-        raise ValueError(&#34;X.shape[1] = %d should be equal to %d, &#34;
-                         &#34;the number of features at training time.&#34;
-                         &#34; Please reshape your data.&#34;
-                         % (X.shape[1], self.n_features_))
-
-    df = pandas.DataFrame(X, columns=self.feature_placeholders)
-    selected_rules = self.rules_without_feature_names_
-
-    scores = np.zeros(X.shape[0])
-    for (k, r) in enumerate(list((selected_rules))):
-        scores[list(df.query(r.rule).index)] = np.maximum(
-            len(selected_rules) - k,
-            scores[list(df.query(r.rule).index)])
-
-    return scores</code></pre>
+    return _instance</code></pre>
 </details>
 </dd>
 </dl>
@@ -1475,7 +1487,7 @@ Positive scores represent outliers, null scores represent inliers.</dd>
 </section>
 </article>
 <nav id="sidebar">
-<h1>Index</h1>
+<h1>Index 🔍</h1>
 <div class="toc">
 <ul>
 <li><a href="#example">Example</a></li>
@@ -1492,22 +1504,26 @@ Positive scores represent outliers, null scores represent inliers.</dd>
 <ul>
 <li>
 <h4><code><a title="imodels.rule_set.skope_rules.SkopeRulesClassifier" href="#imodels.rule_set.skope_rules.SkopeRulesClassifier">SkopeRulesClassifier</a></code></h4>
-<ul class="two-column">
+<ul class="">
 <li><code><a title="imodels.rule_set.skope_rules.SkopeRulesClassifier.fit" href="#imodels.rule_set.skope_rules.SkopeRulesClassifier.fit">fit</a></code></li>
 <li><code><a title="imodels.rule_set.skope_rules.SkopeRulesClassifier.predict" href="#imodels.rule_set.skope_rules.SkopeRulesClassifier.predict">predict</a></code></li>
 <li><code><a title="imodels.rule_set.skope_rules.SkopeRulesClassifier.predict_proba" href="#imodels.rule_set.skope_rules.SkopeRulesClassifier.predict_proba">predict_proba</a></code></li>
-<li><code><a title="imodels.rule_set.skope_rules.SkopeRulesClassifier.predict_top_rules" href="#imodels.rule_set.skope_rules.SkopeRulesClassifier.predict_top_rules">predict_top_rules</a></code></li>
-<li><code><a title="imodels.rule_set.skope_rules.SkopeRulesClassifier.rules_vote" href="#imodels.rule_set.skope_rules.SkopeRulesClassifier.rules_vote">rules_vote</a></code></li>
-<li><code><a title="imodels.rule_set.skope_rules.SkopeRulesClassifier.score_top_rules" href="#imodels.rule_set.skope_rules.SkopeRulesClassifier.score_top_rules">score_top_rules</a></code></li>
+<li><code><a title="imodels.rule_set.skope_rules.SkopeRulesClassifier.set_fit_request" href="#imodels.rule_set.skope_rules.SkopeRulesClassifier.set_fit_request">set_fit_request</a></code></li>
+<li><code><a title="imodels.rule_set.skope_rules.SkopeRulesClassifier.set_score_request" href="#imodels.rule_set.skope_rules.SkopeRulesClassifier.set_score_request">set_score_request</a></code></li>
 </ul>
 </li>
 </ul>
 </li>
 </ul>
+<p><img align="center" width=100% src="https://csinva.io/imodels/img/anim.gif"> </img></p>
+<!-- add wave animation -->
 </nav>
 </main>
 <footer id="footer">
-<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.10.0</a>.</p>
 </footer>
 </body>
 </html>
+<!-- add github corner -->
+<a href="https://github.com/csinva/imodels" class="github-corner" aria-label="View source on GitHub"><svg width="120" height="120" viewBox="0 0 250 250" style="fill:#70B7FD; color:#fff; position: absolute; top: 0; border: 0; right: 0;" aria-hidden="true"><path d="M0,0 L115,115 L130,115 L142,142 L250,250 L250,0 Z"></path><path d="m128.3,109.0 c113.8,99.7 119.0,89.6 119.0,89.6 c122.0,82.7 120.5,78.6 120.5,78.6 c119.2,72.0 123.4,76.3 123.4,76.3 c127.3,80.9 125.5,87.3 125.5,87.3 c122.9,97.6 130.6,101.9 134.4,103.2" fill="currentcolor" style="transform-origin: 130px 106px;" class="octo-arm"></path><path d="M115.0,115.0 C114.9,115.1 118.7,116.5 119.8,115.4 L133.7,101.6 C136.9,99.2 139.9,98.4 142.2,98.6 C133.8,88.0 127.5,74.4 143.8,58.0 C148.5,53.4 154.0,51.2 159.7,51.0 C160.3,49.4 163.2,43.6 171.4,40.1 C171.4,40.1 176.1,42.5 178.8,56.2 C183.1,58.6 187.2,61.8 190.9,65.4 C194.5,69.0 197.7,73.2 200.1,77.6 C213.8,80.2 216.3,84.9 216.3,84.9 C212.7,93.1 206.9,96.0 205.4,96.6 C205.1,102.4 203.0,107.8 198.3,112.5 C181.9,128.9 168.3,122.5 157.7,114.1 C157.9,116.9 156.7,120.9 152.7,124.9 L141.0,136.5 C139.8,137.7 141.6,141.9 141.8,141.8 Z" fill="currentColor" class="octo-body"></path></svg></a><style>.github-corner:hover .octo-arm{animation:octocat-wave 560ms ease-in-out}@keyframes octocat-wave{0%,100%{transform:rotate(0)}20%,60%{transform:rotate(-25deg)}40%,80%{transform:rotate(10deg)}}@media (max-width:500px){.github-corner:hover .octo-arm{animation:none}.github-corner .octo-arm{animation:octocat-wave 560ms ease-in-out}}</style>
+<!-- add wave animation stylesheet -->
+<link rel="stylesheet" href="github.css">

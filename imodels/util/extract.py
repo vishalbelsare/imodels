@@ -2,50 +2,29 @@ from typing import Iterable, Tuple, List
 
 import numpy as np
 import pandas as pd
-from mlxtend.frequent_patterns import fpgrowth
+from mlxtend import frequent_patterns as mlx
 from sklearn.ensemble import BaggingRegressor, GradientBoostingRegressor, RandomForestRegressor, \
-    GradientBoostingClassifier
+    GradientBoostingClassifier, RandomForestClassifier
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.utils.validation import check_array
-
-from imodels.discretization import BRLDiscretizer, SimpleDiscretizer
+import inspect
 from imodels.util import rule, convert
 
 
-def extract_fpgrowth(X, y,
-                     feature_names,
+def extract_fpgrowth(X,
                      minsupport=0.1,
                      maxcardinality=2,
-                     undiscretized_features=[],
-                     disc_strategy='simple',
-                     disc_kwargs={},
-                     verbose=False) -> Tuple[List[Tuple], BRLDiscretizer]:
-    # deal with pandas data
-    if type(X) in [pd.DataFrame, pd.Series]:
-        if feature_names is None:
-            feature_names = X.columns
-        X = X.values
-    if type(y) in [pd.DataFrame, pd.Series]:
-        y = y.values
+                     verbose=False) -> List[Tuple]:
 
-    if disc_strategy == 'mdlp':
-        discretizer = BRLDiscretizer(X, y, feature_labels=feature_names, verbose=verbose)
-        discretizer.fit(X, y, undiscretized_features)
-    else:
-        discretizer = SimpleDiscretizer(**disc_kwargs)
-        discretizer.fit(X, feature_names)
-
-    X_df_onehot = discretizer.transform(X)
-
-    # Now find frequent itemsets
-    itemsets_df = fpgrowth(X_df_onehot, min_support=minsupport, max_len=maxcardinality)
+    itemsets_df = mlx.fpgrowth(
+        X, min_support=minsupport, max_len=maxcardinality)
     itemsets_indices = [tuple(s[1]) for s in itemsets_df.values]
-    itemsets = [np.array(X_df_onehot.columns)[list(inds)] for inds in itemsets_indices]
+    itemsets = [np.array(X.columns)[list(inds)] for inds in itemsets_indices]
     itemsets = list(map(tuple, itemsets))
     if verbose:
         print(len(itemsets), 'rules mined')
 
-    return itemsets, discretizer
+    return itemsets
 
 
 def extract_rulefit(X, y, feature_names,
@@ -65,17 +44,21 @@ def extract_rulefit(X, y, feature_names,
                                                    random_state=random_state,
                                                    max_depth=100)
 
-    if type(tree_generator) not in [GradientBoostingClassifier, GradientBoostingRegressor, RandomForestRegressor]:
+    if type(tree_generator) not in [GradientBoostingClassifier, GradientBoostingRegressor,
+                                    RandomForestRegressor, RandomForestClassifier]:
         raise ValueError(
-            "RuleFit only works with GradientBoostingClassifier, GradientBoostingRegressor, and RandomForestRegressor")
+            "RuleFit only works with GradientBoostingClassifier(), GradientBoostingRegressor(), "
+            "RandomForestRegressor() or RandomForestClassifier()")
 
-    ## fit tree generator
+    # fit tree generator
     if not exp_rand_tree_size:  # simply fit with constant tree size
         tree_generator.fit(X, y)
     else:  # randomise tree size as per Friedman 2005 Sec 3.3
         np.random.seed(random_state)
-        tree_sizes = np.random.exponential(scale=tree_size - 2, size=n_estimators)
-        tree_sizes = np.asarray([2 + np.floor(tree_sizes[i_]) for i_ in np.arange(len(tree_sizes))], dtype=int)
+        tree_sizes = np.random.exponential(
+            scale=tree_size - 2, size=n_estimators)
+        tree_sizes = np.asarray([2 + np.floor(tree_sizes[i_])
+                                for i_ in np.arange(len(tree_sizes))], dtype=int)
         tree_generator.set_params(warm_start=True)
         curr_est_ = 0
         for i_size in np.arange(len(tree_sizes)):
@@ -89,14 +72,14 @@ def extract_rulefit(X, y, feature_names,
             curr_est_ = curr_est_ + 1
         tree_generator.set_params(warm_start=False)
 
-    if isinstance(tree_generator, RandomForestRegressor):
+    if isinstance(tree_generator, RandomForestRegressor) or isinstance(tree_generator, RandomForestClassifier):
         estimators_ = [[x] for x in tree_generator.estimators_]
     else:
         estimators_ = tree_generator.estimators_
 
     seen_rules = set()
     extracted_rules = []
-    for estimator in estimators_: 
+    for estimator in estimators_:
         for rule_value_pair in convert.tree_to_rules(estimator[0], np.array(feature_names), prediction_values=True):
 
             rule_obj = rule.Rule(rule_value_pair[0])
@@ -128,12 +111,21 @@ def extract_skope(X, y, feature_names,
         max_depths = [max_depths]
 
     for max_depth in max_depths:
+
+        # pass different key based on sklearn version
+        estimator = DecisionTreeRegressor(
+            max_depth=max_depth,
+            max_features=max_features,
+            min_samples_split=min_samples_split,
+
+        )
+        init_signature = inspect.signature(BaggingRegressor.__init__)
+        estimator_key = 'estimator' if 'estimator' in init_signature.parameters.keys(
+        ) else 'base_estimator'
+        kwargs = {
+            estimator_key: estimator,
+        }
         bagging_clf = BaggingRegressor(
-            base_estimator=DecisionTreeRegressor(
-                max_depth=max_depth,
-                max_features=max_features,
-                min_samples_split=min_samples_split
-            ),
             n_estimators=n_estimators,
             max_samples=max_samples,
             max_features=max_samples_features,
@@ -144,7 +136,8 @@ def extract_skope(X, y, feature_names,
             # warm_start=... XXX may be added to increase computation perf.
             n_jobs=n_jobs,
             random_state=random_state,
-            verbose=verbose
+            verbose=verbose,
+            **kwargs
         )
         ensembles.append(bagging_clf)
 
@@ -154,8 +147,8 @@ def extract_skope(X, y, feature_names,
         weights = sample_weight - sample_weight.min()
         contamination = float(sum(y)) / len(y)
         y_reg = (
-                pow(weights, 0.5) * 0.5 / contamination * (y > 0) -
-                pow((weights).mean(), 0.5) * (y == 0)
+            pow(weights, 0.5) * 0.5 / contamination * (y > 0) -
+            pow((weights).mean(), 0.5) * (y == 0)
         )
         y_reg = 1. / (1 + np.exp(-y_reg))  # sigmoid
 
@@ -173,6 +166,50 @@ def extract_skope(X, y, feature_names,
 
     extracted_rules = []
     for estimator, features in zip(estimators_, estimators_features_):
-        extracted_rules.append(convert.tree_to_rules(estimator, np.array(feature_names)[features]))
+        extracted_rules.append(convert.tree_to_rules(
+            estimator, np.array(feature_names)[features]))
 
     return extracted_rules, estimators_samples_, estimators_features_
+
+
+def extract_marginal_curves(clf, X, max_evals=100):
+    """Uses predict_proba to compute marginal curves.
+    Assumes clf is a classifier with a predict_proba method and that classifier is additive across features
+    For GAM, this returns the shape functions
+
+    Params
+    ------
+    clf : classifier
+        A classifier with a predict_proba method
+    X : array-like
+        The data to compute the marginal curves on (used to calculate unique feature vals)
+    max_evals : int
+        The maximum number of evaluations to make for each feature
+
+    Returns
+    -------
+    feature_vals_list : list of arrays
+        The values of each feature for which the shape function is evaluated.
+    shape_function_vals_list : list of arrays
+        The shape function evaluated at each value of the corresponding feature.
+    """
+    p = X.shape[1]
+    dummy_input = np.zeros((1, p))
+    base = clf.predict_proba(dummy_input)[:, 1][0]
+    feature_vals_list = []
+    shape_function_vals_list = []
+    for feat_num in range(p):
+        feature_vals = sorted(np.unique(X[:, feat_num]))
+        while len(feature_vals) > max_evals:
+            feature_vals = feature_vals[::2]
+        dummy_input = np.zeros((len(feature_vals), p))
+        dummy_input[:, feat_num] = feature_vals
+        shape_function_vals = clf.predict_proba(dummy_input)[:, 1] - base
+        feature_vals_list.append(feature_vals)
+        shape_function_vals_list.append(shape_function_vals.tolist())
+    return feature_vals_list, shape_function_vals_list
+
+
+if __name__ == '__main__':
+    init_signature = inspect.signature(BaggingRegressor.__init__)
+    print('estimator' in init_signature.parameters.keys())

@@ -16,7 +16,6 @@ from sklearn.linear_model import LinearRegression, Lasso, LogisticRegression
 from sklearn.utils.multiclass import check_classification_targets
 from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 
-
 class SLIMRegressor(BaseEstimator, RegressorMixin):
     '''Sparse integer linear model
     Params
@@ -34,7 +33,7 @@ class SLIMRegressor(BaseEstimator, RegressorMixin):
         
         Params
         ------
-        sample_weight: np.ndarray (n,), optional
+        _sample_weight: np.ndarray (n,), optional
             weight for each individual sample
         '''
 
@@ -107,7 +106,7 @@ class SLIMClassifier(BaseEstimator, ClassifierMixin):
         
         Params
         ------
-        sample_weight: np.ndarray (n,), optional
+        _sample_weight: np.ndarray (n,), optional
             weight for each individual sample
         '''
         X, y = check_X_y(X, y)

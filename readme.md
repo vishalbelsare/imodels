@@ -1,6 +1,8 @@
 <p align="center">
 	<img align="center" width=60% src="https://csinva.io/imodels/img/imodels_logo.svg?sanitize=True&kill_cache=1"> </img>	 <br/>
-	Python package for concise, transparent, and accurate predictive modeling. All sklearn-compatible and easy to use.
+	Python package for concise, transparent, and accurate predictive modeling. <br/>
+	All sklearn-compatible and easy to use. <br/>
+	<i> For interpretability in NLP, check out our new package: <a href="https://github.com/csinva/imodelsX">imodelsX</a> </i>
 </p>
 <p align="center">
   <a href="https://csinva.github.io/imodels/">📚 docs</a> •
@@ -8,7 +10,8 @@
 </p>
 <p align="center">
   <img src="https://img.shields.io/badge/license-mit-blue.svg">
-  <img src="https://img.shields.io/badge/python-3.6--3.9-blue">
+  <img src="https://img.shields.io/badge/python-3.9--3.11-blue">
+  <img src="https://img.shields.io/badge/numpy-<2.0-blue">
   <a href="https://doi.org/10.21105/joss.03192"><img src="https://joss.theoj.org/papers/10.21105/joss.03192/status.svg"></a>
   <a href="https://github.com/csinva/imodels/actions"><img src="https://github.com/csinva/imodels/workflows/tests/badge.svg"></a>
   <!--img src="https://img.shields.io/github/checks-status/csinva/imodels/master"-->
@@ -17,61 +20,110 @@
 </p>  
 
 
-
-
-
 <img align="center" width=100% src="https://csinva.io/imodels/img/anim.gif"> </img>
 
 Modern machine-learning models are increasingly complex, often making them difficult to interpret. This package provides a simple interface for fitting and using state-of-the-art interpretable models, all compatible with scikit-learn. These models can often replace black-box models (e.g. random forests) with simpler models (e.g. rule lists) while improving interpretability and computational efficiency, all without sacrificing predictive accuracy! Simply import a classifier or regressor and use the `fit` and `predict` methods, same as standard scikit-learn models.
 
 ```python
-from imodels import BoostedRulesClassifier, FIGSClassifier, SkopeRulesClassifier
-from imodels import RuleFitRegressor, HSTreeRegressorCV, SLIMRegressor
+from sklearn.model_selection import train_test_split
+from imodels import get_clean_dataset, HSTreeClassifierCV # import any imodels model here
 
-model = BoostedRulesClassifier()  # initialize a model
-model.fit(X_train, y_train)   # fit model
-preds = model.predict(X_test) # predictions: shape is (n_test, 1)
+# prepare data (a sample clinical dataset)
+X, y, feature_names = get_clean_dataset('csi_pecarn_pred')
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, random_state=42)
+
+# fit the model
+model = HSTreeClassifierCV(max_leaf_nodes=4)  # initialize a tree model and specify only 4 leaf nodes
+model.fit(X_train, y_train, feature_names=feature_names)   # fit model
+preds = model.predict(X_test) # discrete predictions: shape is (n_test, 1)
 preds_proba = model.predict_proba(X_test) # predicted probabilities: shape is (n_test, n_classes)
-print(model) # print the rule-based model
+print(model) # print the model
+```
 
------------------------------
-# the model consists of the following 3 rules
-# if X1 > 5: then 80.5% risk
-# else if X2 > 5: then 40% risk
-# else: 10% risk
+```
+------------------------------
+Decision Tree with Hierarchical Shrinkage
+Prediction is made by looking at the value in the appropriate leaf of the tree
+------------------------------
+|--- FocalNeuroFindings2 <= 0.50
+|   |--- HighriskDiving <= 0.50
+|   |   |--- Torticollis2 <= 0.50
+|   |   |   |--- value: [0.10]
+|   |   |--- Torticollis2 >  0.50
+|   |   |   |--- value: [0.30]
+|   |--- HighriskDiving >  0.50
+|   |   |--- value: [0.68]
+|--- FocalNeuroFindings2 >  0.50
+|   |--- value: [0.42]
 ```
 
 ### Installation
 
-Install with `pip install imodels` (see [here](https://github.com/csinva/imodels/blob/master/docs/troubleshooting.md) for help). 
+Install with `pip install imodels` (see [here](https://github.com/csinva/imodels/blob/master/docs/troubleshooting.md) for help).
 
 ### Supported models
 
-| Model                       | Reference                                                    | Description                                                  |
-| :-------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| Rulefit rule set            | [🗂️](https://csinva.io/imodels/rule_set/rule_fit.html), [🔗](https://github.com/christophM/rulefit), [📄](http://statweb.stanford.edu/~jhf/ftp/RuleFit.pdf) | Fits a sparse linear model on rules extracted from decision trees |
-| Skope rule set              | [🗂️](https://csinva.io/imodels/rule_set/skope_rules.html#imodels.rule_set.skope_rules.SkopeRulesClassifier), [🔗](https://github.com/scikit-learn-contrib/skope-rules) | Extracts rules from gradient-boosted trees, deduplicates them,<br/>then linearly combines them based on their OOB precision |
-| Boosted rule set            | [🗂️](https://csinva.io/imodels/rule_set/boosted_rules.html), [🔗](https://github.com/jaimeps/adaboost-implementation), [📄](https://www.sciencedirect.com/science/article/pii/S002200009791504X) | Sequentially fits a set of rules with Adaboost           |
-| Slipper rule set            | [🗂️](https://csinva.io/imodels/rule_set/slipper.html), ㅤㅤ[📄](https://www.aaai.org/Papers/AAAI/1999/AAAI99-049.pdf) | Sequentially learns a set of rules with SLIPPER            |
-| Bayesian rule set           | [🗂️](https://csinva.io/imodels/rule_set/brs.html#imodels.rule_set.brs.BayesianRuleSetClassifier), [🔗](https://github.com/wangtongada/BOA), [📄](https://www.jmlr.org/papers/volume18/16-003/16-003.pdf) | Finds concise rule set with Bayesian sampling (slow)  |
-| Optimal rule list           | [🗂️](https://csinva.io/imodels/rule_list/corels_wrapper.html#imodels.rule_list.corels_wrapper.OptimalRuleListClassifier), [🔗](https://github.com/corels/pycorels), [📄](https://www.jmlr.org/papers/volume18/17-716/17-716.pdf) | Fits rule list using global optimization for sparsity (CORELS) |
-| Bayesian rule list          | [🗂️](https://csinva.io/imodels/rule_list/bayesian_rule_list/bayesian_rule_list.html#imodels.rule_list.bayesian_rule_list.bayesian_rule_list.BayesianRuleListClassifier), [🔗](https://github.com/tmadl/sklearn-expertsys), [📄](https://arxiv.org/abs/1602.08610) | Fits compact rule list distribution with Bayesian sampling (slow) |
-| Greedy rule list            | [🗂️](https://csinva.io/imodels/rule_list/greedy_rule_list.html), [🔗](https://medium.com/@penggongting/implementing-decision-tree-from-scratch-in-python-c732e7c69aea) | Uses CART to fit a list (only a single path), rather than a tree |
-| OneR rule list              | [🗂️](https://csinva.io/imodels/rule_list/one_r.html), ㅤㅤ[📄](https://link.springer.com/article/10.1023/A:1022631118932) | Fits rule list restricted to only one feature              |
-| Optimal rule tree           | [🗂️](https://csinva.io/imodels/tree/gosdt/pygosdt.html#imodels.tree.gosdt.pygosdt.OptimalTreeClassifier), [🔗](https://github.com/Jimmy-Lin/GeneralizedOptimalSparseDecisionTrees), [📄](https://arxiv.org/abs/2006.08690) | Fits succinct tree using global optimization for sparsity (GOSDT) |
-| Greedy rule tree            | [🗂️](https://csinva.io/imodels/tree/cart_wrapper.html), [🔗](https://scikit-learn.org/stable/modules/tree.html), [📄](https://www.taylorfrancis.com/books/mono/10.1201/9781315139470/classification-regression-trees-leo-breiman-jerome-friedman-richard-olshen-charles-stone) | Greedily fits tree using CART                              |
-| C4.5 rule tree        | [🗂️](https://csinva.io/imodels/tree/c45_tree/c45_tree.html#imodels.tree.c45_tree.c45_tree.C45TreeClassifier), [🔗](https://github.com/RaczeQ/scikit-learn-C4.5-tree-classifier), [📄](https://link.springer.com/article/10.1007/BF00993309) | Greedily fits tree using C4.5                           |
-| Iterative random<br/>forest | [🗂️](https://csinva.io/imodels/tree/iterative_random_forest/iterative_random_forest.html), [🔗](https://github.com/Yu-Group/iterative-Random-Forest), [📄](https://www.pnas.org/content/115/8/1943) | Repeatedly fit random forest, giving features with<br/>high importance a higher chance of being selected |
-| Sparse integer<br/>linear model | [🗂️](https://csinva.io/imodels/algebraic/slim.html), ㅤㅤ[📄](https://link.springer.com/article/10.1007/s10994-015-5528-6) | Sparse linear model with integer coefficients                           |
-| <b>Greedy tree sums</b> | [🗂️](https://csinva.io/imodels/tree/figs.html#imodels.tree.figs), ㅤㅤ[📄](https://arxiv.org/abs/2201.11931) | Sum of small trees with very few total rules (FIGS)                          |
-| <b>Hierarchical<br/> shrinkage wrapper</b> | [🗂️](https://csinva.io/imodels/tree/hierarchical_shrinkage.html), ㅤㅤ[📄](https://arxiv.org/abs/2202.00858) | Improve any tree-based model with ultra-fast, post-hoc regularization |
-| Distillation<br/>wrapper | [🗂️](https://csinva.io/imodels/util/distillation.html)  | Train a black-box model,<br/>then distill it into an interpretable model |
-| More models                 | ⌛                                                            | (Coming soon!) Lightweight Rule Induction, MLRules, ... |
-
-<p align="center">
-Docs <a href="https://csinva.io/imodels/">🗂️</a>, Reference code implementation 🔗, Research paper 📄
+<p align="left">
+<a href="https://csinva.io/imodels/">🗂️</a> Docs &emsp; 📄 Research paper &emsp;  🔗 Reference code implementation
 </br>
 </p>
+
+| Model                       | Reference                                                    | Description                                                  |
+| :-------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| Rulefit rule set            | [🗂️](https://csinva.io/imodels/rule_set/rule_fit.html), [📄](http://statweb.stanford.edu/~jhf/ftp/RuleFit.pdf), [🔗](https://github.com/christophM/rulefit) | Fits a sparse linear model on rules extracted from decision trees |
+| Skope rule set              | [🗂️](https://csinva.io/imodels/rule_set/skope_rules.html#imodels.rule_set.skope_rules.SkopeRulesClassifier), [🔗](https://github.com/scikit-learn-contrib/skope-rules) | Extracts rules from gradient-boosted trees, deduplicates them,<br/>then linearly combines them based on their OOB precision |
+| Boosted rule set            | [🗂️](https://csinva.io/imodels/rule_set/boosted_rules.html), [📄](https://www.sciencedirect.com/science/article/pii/S002200009791504X), [🔗](https://github.com/jaimeps/adaboost-implementation) | Sequentially fits a set of rules with Adaboost           |
+| Slipper rule set            | [🗂️](https://csinva.io/imodels/rule_set/slipper.html), [📄](https://www.aaai.org/Papers/AAAI/1999/AAAI99-049.pdf) | Sequentially learns a set of rules with SLIPPER            |
+| Bayesian rule set           | [🗂️](https://csinva.io/imodels/rule_set/brs.html#imodels.rule_set.brs.BayesianRuleSetClassifier), [📄](https://www.jmlr.org/papers/volume18/16-003/16-003.pdf), [🔗](https://github.com/wangtongada/BOA) | Finds concise rule set with Bayesian sampling (slow)  |
+| Optimal rule list           | [🗂️](https://csinva.io/imodels/rule_list/corels_wrapper.html#imodels.rule_list.corels_wrapper.OptimalRuleListClassifier), [📄](https://www.jmlr.org/papers/volume18/17-716/17-716.pdf), [🔗](https://github.com/corels/pycorels) | Fits rule list using global optimization for sparsity (CORELS) |
+| Bayesian rule list          | [🗂️](https://csinva.io/imodels/rule_list/bayesian_rule_list/bayesian_rule_list.html#imodels.rule_list.bayesian_rule_list.bayesian_rule_list.BayesianRuleListClassifier), [📄](https://projecteuclid.org/journals/annals-of-applied-statistics/volume-9/issue-3/Interpretable-classifiers-using-rules-and-Bayesian-analysis--Building-a/10.1214/15-AOAS848.full), [🔗](https://github.com/tmadl/sklearn-expertsys) | Fits compact rule list distribution with Bayesian sampling (slow) |
+| Greedy rule list            | [🗂️](https://csinva.io/imodels/rule_list/greedy_rule_list.html), [🔗](https://medium.com/@penggongting/implementing-decision-tree-from-scratch-in-python-c732e7c69aea) | Uses CART to fit a list (only a single path), rather than a tree |
+| OneR rule list              | [🗂️](https://csinva.io/imodels/rule_list/one_r.html), [📄](https://link.springer.com/article/10.1023/A:1022631118932) | Fits rule list restricted to only one feature              |
+| Optimal rule tree           | [🗂️](https://csinva.io/imodels/tree/gosdt/pygosdt.html#imodels.tree.gosdt.pygosdt.OptimalTreeClassifier), [📄](https://arxiv.org/abs/2006.08690), [🔗](https://github.com/Jimmy-Lin/GeneralizedOptimalSparseDecisionTrees) | Fits succinct tree using global optimization for sparsity (GOSDT) |
+| Greedy rule tree            | [🗂️](https://csinva.io/imodels/tree/cart_wrapper.html), [📄](https://www.taylorfrancis.com/books/mono/10.1201/9781315139470/classification-regression-trees-leo-breiman-jerome-friedman-richard-olshen-charles-stone), [🔗](https://scikit-learn.org/stable/modules/tree.html)  | Greedily fits tree using CART                              |
+| C4.5 rule tree        | [🗂️](https://csinva.io/imodels/tree/c45_tree/c45_tree.html#imodels.tree.c45_tree.c45_tree.C45TreeClassifier), [📄](https://link.springer.com/article/10.1007/BF00993309), [🔗](https://github.com/RaczeQ/scikit-learn-C4.5-tree-classifier) | Greedily fits tree using C4.5                           |
+| TAO rule tree        | [🗂️](https://csinva.io/imodels/tree/tao.html), [📄](https://proceedings.neurips.cc/paper/2018/hash/185c29dc24325934ee377cfda20e414c-Abstract.html) | Fits tree using alternating optimization                    |
+| Iterative random<br/>forest | [🗂️](https://csinva.io/imodels/tree/iterative_random_forest/iterative_random_forest.html), [📄](https://www.pnas.org/content/115/8/1943), [🔗](https://github.com/Yu-Group/iterative-Random-Forest) | Repeatedly fit random forest, giving features with<br/>high importance a higher chance of being selected |
+| Sparse integer<br/>linear model | [🗂️](https://csinva.io/imodels/algebraic/slim.html), [📄](https://link.springer.com/article/10.1007/s10994-015-5528-6) | Sparse linear model with integer coefficients                           |
+| Tree GAM | [🗂️](https://csinva.io/imodels/algebraic/tree_gam.html), [📄](https://dl.acm.org/doi/abs/10.1145/2339530.2339556), [🔗](https://github.com/interpretml/interpret) | Generalized additive model fit with short boosted trees                           |
+| <b>Greedy tree</br>sums (FIGS)</b> | [🗂️](https://csinva.io/imodels/figs.html),ㅤ[📄](https://arxiv.org/abs/2201.11931) | Sum of small trees with very few total rules (FIGS)                          |
+| <b>Hierarchical<br/> shrinkage wrapper</b> | [🗂️](https://csinva.io/imodels/shrinkage.html), [📄](https://arxiv.org/abs/2202.00858) | Improve a decision tree, random forest, or<br/>gradient-boosting ensemble with ultra-fast, post-hoc regularization |
+| <b>RF+ (MDI+)</b> | [🗂️](https://csinva.io/imodels/mdi_plus.html), [📄](https://arxiv.org/pdf/2307.01932) | Flexible random forest-based feature importance |
+| Distillation<br/>wrapper | [🗂️](https://csinva.io/imodels/util/distillation.html)  | Train a black-box model,<br/>then distill it into an interpretable model |
+| AutoML wrapper | [🗂️](https://csinva.io/imodels/util/automl.html)  | Automatically fit and select an interpretable model |
+| More models                 | ⌛                                                            | (Coming soon!) Lightweight Rule Induction, MLRules, ... |
+
+## Demo notebooks
+
+Demos are contained in the [notebooks](notebooks) folder.
+
+<details>
+<summary><a href="https://github.com/csinva/imodels/blob/master/notebooks/imodels_demo.ipynb">Quickstart demo</a></summary>
+Shows how to fit, predict, and visualize with different interpretable models
+</details>
+
+<details>
+<summary><a href="https://auto.gluon.ai/dev/tutorials/tabular_prediction/tabular-interpretability.html">Autogluon demo</a></summary>
+Fit/select an interpretable model automatically using Autogluon AutoML
+</details>
+
+<details>
+<summary><a href="https://colab.research.google.com/drive/1WfqvSjegygT7p0gyqiWpRpiwz2ePtiao#scrollTo=bLnLknIuoWtQ">Quickstart colab demo</a> <a href="https://colab.research.google.com/drive/1WfqvSjegygT7p0gyqiWpRpiwz2ePtiao#scrollTo=bLnLknIuoWtQ"> <img src="https://colab.research.google.com/assets/colab-badge.svg"></a></summary>
+Shows how to fit, predict, and visualize with different interpretable models
+</details>
+
+<details>
+<summary><a href="https://github.com/csinva/iai-clinical-decision-rule/blob/master/notebooks/05_fit_interpretable_models.ipynb">Clinical decision rule notebook</a></summary>
+Shows an example of using <code>imodels</code> for deriving a clinical decision rule
+</details>
+
+<details>
+<summary>Posthoc analysis</summary>
+We also include some demos of posthoc analysis, which occurs after fitting models:
+<a href="https://github.com/csinva/imodels/blob/master/notebooks/posthoc_analysis.ipynb">posthoc.ipynb</a> shows different simple analyses to interpret a trained model and 
+<a href="https://github.com/csinva/imodels/blob/master/notebooks/uncertainty_analysis.ipynb">uncertainty.ipynb</a> contains basic code to get uncertainty estimates for a model
+</details>
 
 ## What's the difference between the models?
 
@@ -102,32 +154,6 @@ Bayesian rule lists and greedy rule lists differ in how they select rules; bayes
 FPSkope and SkopeRules differ only in the way they generate candidate rules: FPSkope uses FPgrowth whereas SkopeRules extracts rules from decision trees.
 </details>
 
-## Demo notebooks
-
-Demos are contained in the [notebooks](notebooks) folder.
-
-<details>
-<summary><a href="notebooks/imodels_demo.ipynb">Quickstart demo</a></summary>
-Shows how to fit, predict, and visualize with different interpretable models
-</details>
-
-<details>
-<summary><a href="https://colab.research.google.com/drive/1WfqvSjegygT7p0gyqiWpRpiwz2ePtiao#scrollTo=bLnLknIuoWtQ">Quickstart colab demo</a> <a href="https://colab.research.google.com/drive/1WfqvSjegygT7p0gyqiWpRpiwz2ePtiao#scrollTo=bLnLknIuoWtQ"> <img src="https://colab.research.google.com/assets/colab-badge.svg"></a></summary>
-Shows how to fit, predict, and visualize with different interpretable models
-</details>
-
-<details>
-<summary><a href="https://github.com/csinva/iai-clinical-decision-rule/blob/master/notebooks/05_fit_interpretable_models.ipynb">Clinical decision rule notebook</a></summary>
-Shows an example of using <code>imodels</code> for deriving a clinical decision rule
-</details>
-
-<details>
-<summary>Posthoc analysis</summary>
-We also include some demos of posthoc analysis, which occurs after fitting models:
-<a href="notebooks/posthoc_analysis.ipynb">posthoc.ipynb</a> shows different simple analyses to interpret a trained model and 
-<a href="notebooks/uncertainty_analysis.ipynb">uncertainty.ipynb</a> contains basic code to get uncertainty estimates for a model
-</details>
-
 ## Support for different tasks
 
 Different models support different machine-learning tasks. Current support for different models is given below (each of these models can be imported directly from imodels (e.g. `from imodels import RuleFitClassifier`):
@@ -135,8 +161,8 @@ Different models support different machine-learning tasks. Current support for d
 | Model                       |                    Binary classification                     |                          Regression                          | Notes |
 | :-------------------------- | :----------------------------------------------------------: | :----------------------------------------------------------: | --------------------------- |
 | Rulefit rule set            | [RuleFitClassifier](https://csinva.io/imodels/rule_set/rule_fit.html#imodels.rule_set.rule_fit.RuleFitClassifier) | [RuleFitRegressor](https://csinva.io/imodels/rule_set/rule_fit.html#imodels.rule_set.rule_fit.RuleFitRegressor) |  |
-| Skope rule set              | [SkopeRulesClassifier](https://csinva.io/imodels/rule_set/slipper.html#imodels.rule_set.slipper.SlipperClassifier) |                                                              |  |
-| Boosted rule set            | [BoostedRulesClassifier](https://csinva.io/imodels/rule_set/boosted_rules.html#imodels.rule_set.boosted_rules.BoostedRulesClassifier) |                                                              |  |
+| Skope rule set              | [SkopeRulesClassifier](https://csinva.io/imodels/rule_set/skope_rules.html#imodels.rule_set.skope_rules.SkopeRulesClassifier) |                                                              |  |
+| Boosted rule set            | [BoostedRulesClassifier](https://csinva.io/imodels/rule_set/boosted_rules.html#imodels.rule_set.boosted_rules.BoostedRulesClassifier) | [BoostedRulesRegressor](https://csinva.io/imodels/rule_set/boosted_rules.html#imodels.rule_set.boosted_rules.BoostedRulesRegressor) |  |
 | SLIPPER rule set            | [SlipperClassifier](https://csinva.io/imodels/rule_set/slipper.html#imodels.rule_set.slipper.SlipperClassifier) |                                                              |  |
 | Bayesian rule set           | [BayesianRuleSetClassifier](https://csinva.io/imodels/rule_set/brs.html#imodels.rule_set.brs.BayesianRuleSetClassifier) |                                                              | Fails for large problems |
 | Optimal rule list (CORELS)  | [OptimalRuleListClassifier](https://csinva.io/imodels/rule_list/corels_wrapper.html#imodels.rule_list.corels_wrapper.OptimalRuleListClassifier) |                                                              | Requires [corels](https://pypi.org/project/corels/), fails for large problems |
@@ -146,11 +172,15 @@ Different models support different machine-learning tasks. Current support for d
 | Optimal rule tree (GOSDT)   | [OptimalTreeClassifier](https://csinva.io/imodels/tree/gosdt/pygosdt.html#imodels.tree.gosdt.pygosdt.OptimalTreeClassifier) |                                                              | Requires [gosdt](https://pypi.org/project/gosdt/), fails for large problems |
 | Greedy rule tree (CART)     | [GreedyTreeClassifier](https://csinva.io/imodels/tree/cart_wrapper.html#imodels.tree.cart_wrapper.GreedyTreeClassifier) |      [GreedyTreeRegressor](https://csinva.io/imodels/tree/cart_wrapper.html#imodels.tree.cart_wrapper.GreedyTreeRegressor)                                                        |  |
 | C4.5 rule tree              | [C45TreeClassifier](https://csinva.io/imodels/tree/c45_tree/c45_tree.html#imodels.tree.c45_tree.c45_tree.C45TreeClassifier) |           |  |
+| TAO rule tree              | [TaoTreeClassifier](https://csinva.io/imodels/tree/tao.html#imodels.tree.tao.TaoTreeClassifier) |   [TaoTreeRegressor](https://csinva.io/imodels/tree/tao.html#imodels.tree.tao.TaoTreeRegressor)        |  |
 | Iterative random forest     | [IRFClassifier](https://csinva.io/imodels/tree/iterative_random_forest/iterative_random_forest.html#imodels.tree.iterative_random_forest.iterative_random_forest.IRFClassifier)                                                             |                                                              | Requires [irf](https://pypi.org/project/irf/) |
 | Sparse integer linear model | [SLIMClassifier](https://csinva.io/imodels/algebraic/slim.html#imodels.algebraic.slim.SLIMClassifier) | [SLIMRegressor](https://csinva.io/imodels/algebraic/slim.html#imodels.algebraic.slim.SLIMRegressor) | Requires extra dependencies for speed |
+| Tree GAM | [TreeGAMClassifier](https://csinva.io/imodels/algebraic/tree_gam.html) | [TreeGAMRegressor](https://csinva.io/imodels/algebraic/tree_gam.html) | |
 | Greedy tree sums (FIGS) | [FIGSClassifier](https://csinva.io/imodels/tree/figs.html#imodels.tree.figs.FIGSClassifier) | [FIGSRegressor](https://csinva.io/imodels/tree/figs.html#imodels.tree.figs.FIGSRegressor) |                                                              |
 | Hierarchical shrinkage | [HSTreeClassifierCV](https://csinva.io/imodels/tree/hierarchical_shrinkage.html#imodels.tree.hierarchical_shrinkage.HSTreeClassifierCV) | [HSTreeRegressorCV](https://csinva.io/imodels/tree/hierarchical_shrinkage.html#imodels.tree.hierarchical_shrinkage.HSTreeRegressorCV) | Wraps any sklearn tree-based model |
-| Distillation |  | [DistilledRegressor](https://csinva.io/imodels/docs/util/distillation.html#imodels.util.distillation.DistilledRegressor) | Wraps any sklearn-compatible models |
+| Distillation |  | [DistilledRegressor](https://csinva.io/imodels/util/distillation.html#imodels.util.distillation.DistilledRegressor) | Wraps any sklearn-compatible models |
+| AutoML model | [AutoInterpretableClassifier️](https://csinva.io/imodels/util/automl.html)  | [AutoInterpretableRegressor️](https://csinva.io/imodels/util/automl.html) | |
+
 
 ### Extras
 
@@ -196,7 +226,7 @@ Fit an interpretable model to explain a previous model's errors (ex. in <a href=
 
 <details>
 <summary><a href="https://csinva.io/imodels/util/index.html">Rule-based utils</a> for customizing models</summary>
-The code here contains many useful and customizable functions for rule-based learning in the [util folder](https://csinva.io/imodels/util/index.html). This includes functions / classes for rule deduplication, rule screening, and converting between trees, rulesets, and neural networks.
+The code here contains many useful and customizable functions for rule-based learning in the <a href="https://csinva.io/imodels/util/index.html">util folder</a>. This includes functions / classes for rule deduplication, rule screening, and converting between trees, rulesets, and neural networks.
 </details>
 
 ## Our favorite models
@@ -205,7 +235,7 @@ After developing and playing with `imodels`, we developed a few new models to ov
 
 ### FIGS: Fast interpretable greedy-tree sums
 
-[📄 Paper](https://arxiv.org/abs/2201.11931), [🔗 Post](https://demos.csinva.io/figs/), [📌 Citation]()
+[📄 Paper](https://arxiv.org/abs/2201.11931), [🔗 Post](https://csinva.io/imodels/figs.html), [📌 Citation](https://scholar.google.com/scholar?hl=en&as_sdt=0%2C5&q=fast+interpretable+greedy-tree+sums&oq=fast#d=gs_cit&u=%2Fscholar%3Fq%3Dinfo%3ADnPVL74Rop0J%3Ascholar.google.com%2F%26output%3Dcite%26scirp%3D0%26hl%3Den)
 
 Fast Interpretable Greedy-Tree Sums (FIGS) is an algorithm for fitting concise rule-based models. Specifically, FIGS generalizes CART to simultaneously grow a flexible number of trees in a summation. The total number of splits across all the trees can be restricted by a pre-specified threshold, keeping the model interpretable. Experiments across a wide array of real-world datasets show that FIGS achieves state-of-the-art prediction performance when restricted to just a few splits (e.g. less than 20).
 
@@ -213,14 +243,28 @@ Fast Interpretable Greedy-Tree Sums (FIGS) is an algorithm for fitting concise r
 	<img src="https://demos.csinva.io/figs/diabetes_figs.svg?sanitize=True" width="50%">
 </p>  
 <p align="center">	
-	<i>Example FIGS model. FIGS learns a sum of trees with a flexible number of trees; to make its prediction, it sums the result from each tree.</i>
+	<i><b>Example FIGS model.</b> FIGS learns a sum of trees with a flexible number of trees; to make its prediction, it sums the result from each tree.</i>
 </p>
 
 ### Hierarchical shrinkage: post-hoc regularization for tree-based methods
 
-[📄 Paper](https://arxiv.org/abs/2202.00858), [🔗 Post](https://demos.csinva.io/shrinkage/), [📌 Citation]()
+[📄 Paper](https://arxiv.org/abs/2202.00858) (ICML 2022), [🔗 Post](https://csinva.io/imodels/shrinkage.html), [📌 Citation](https://scholar.google.com/scholar?hl=en&as_sdt=0%2C5&q=hierarchical+shrinkage+singh&btnG=&oq=hierar#d=gs_cit&u=%2Fscholar%3Fq%3Dinfo%3Azc6gtLx-aL4J%3Ascholar.google.com%2F%26output%3Dcite%26scirp%3D0%26hl%3Den)
 
-Hierarchical shinkage is an extremely fast post-hoc regularization method which works on any decision tree (or tree-based ensemble, such as Random Forest). It does not modify the tree structure, and instead regularizes the tree by shrinking the prediction over each node towards the sample means of its ancestors (using a single regularization parameter). Experiments over a wide variety of datasets show that hierarchical shrinkage substantially increases the predictive performance of individual decision trees and decision-tree ensembles.
+Hierarchical shrinkage is an extremely fast post-hoc regularization method which works on any decision tree (or tree-based ensemble, such as Random Forest). It does not modify the tree structure, and instead regularizes the tree by shrinking the prediction over each node towards the sample means of its ancestors (using a single regularization parameter). Experiments over a wide variety of datasets show that hierarchical shrinkage substantially increases the predictive performance of individual decision trees and decision-tree ensembles.
+
+<p align="center">
+	<img src="https://demos.csinva.io/shrinkage/shrinkage_intro.svg?sanitize=True" width="75%">
+</p>  
+<p align="center">	
+	<i><b>HS Example.</b> HS applies post-hoc regularization to any decision tree by shrinking each node towards its parent.</i>
+</p>
+
+### MDI+: Flexible Tree-Based Feature Importance
+
+[📄 Paper](https://arxiv.org/pdf/2307.01932.pdf), [🔗 Post](https://csinva.io/imodels/mdi_plus.html), [📌 Citation](https://scholar.google.com/scholar?hl=en&as_sdt=0%2C23&q=MDI%2B%3A+A+Flexible+Random+Forest-Based+Feature+Importance+Framework&btnG=#d=gs_cit&t=1690399844081&u=%2Fscholar%3Fq%3Dinfo%3Axc0LcHXE_lUJ%3Ascholar.google.com%2F%26output%3Dcite%26scirp%3D0%26hl%3Den)
+
+MDI+ is a novel feature importance framework, which generalizes the popular mean decrease in impurity (MDI) importance score for random forests. At its core, MDI+ expands upon a recently discovered connection between linear regression and decision trees. In doing so, MDI+ enables practitioners to (1) tailor the feature importance computation to the data/problem structure and (2) incorporate additional features or knowledge to mitigate known biases of decision trees. In both real data case studies and extensive real-data-inspired simulations, MDI+ outperforms commonly used feature importance measures (e.g., MDI, permutation-based scores, and TreeSHAP) by substantional margins.
+
 
 ## References
 
@@ -268,21 +312,21 @@ The code here heavily derives from the wonderful work of previous projects. We s
 </details>
 
 
-If it's useful for you, please star/cite the package, and make sure to give authors of original methods / base implementations credit:
+Please cite the package if you use it in an academic work :)
 
 ```r
 @software{
-    imodels2021,
-    title        = {{imodels: a python package for fitting interpretable models}},
-    journal      = {Journal of Open Source Software}
-    publisher    = {The Open Journal},
-    year         = {2021},
-    author       = {Singh, Chandan and Nasseri, Keyan and Tan, Yan Shuo and Tang, Tiffany and Yu, Bin},
-    volume       = {6},
-    number       = {61},
-    pages        = {3192},
-    doi          = {10.21105/joss.03192},
-    url          = {https://doi.org/10.21105/joss.03192},
+	imodels2021,
+	title        = {imodels: a python package for fitting interpretable models},
+	journal      = {Journal of Open Source Software},
+	publisher    = {The Open Journal},
+	year         = {2021},
+	author       = {Singh, Chandan and Nasseri, Keyan and Tan, Yan Shuo and Tang, Tiffany and Yu, Bin},
+	volume       = {6},
+	number       = {61},
+	pages        = {3192},
+	doi          = {10.21105/joss.03192},
+	url          = {https://doi.org/10.21105/joss.03192},
 }
 
 ```
