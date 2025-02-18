@@ -4,8 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1" />
 <meta name="generator" content="pdoc 0.10.0" />
-<title>imodels.rule_list.greedy_rule_list API documentation</title>
-<meta name="description" content="Greedy rule list. Greedily splits on one feature at a time along a single path." />
 <link rel="preload stylesheet" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/11.0.1/sanitize.min.css" integrity="sha256-PK9q560IAAa6WVRRh76LtCaI8pjTJ2z11v0miyNNjrs=" crossorigin>
 <link rel="preload stylesheet" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/11.0.1/typography.min.css" integrity="sha256-7l/o7C8jubJiy74VsKTidCy1yBkRtiUGbVkYBylBqUg=" crossorigin>
 <link rel="stylesheet preload" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/10.1.1/styles/github.min.css" crossorigin>
@@ -18,31 +16,36 @@
 <body>
 <main>
 <article id="content">
-<header>
-<h1 class="title">Module <code>imodels.rule_list.greedy_rule_list</code></h1>
-</header>
 <section id="section-intro">
-<p>Greedy rule list. Greedily splits on one feature at a time along a single path.</p>
+<p>Greedy rule list.
+Greedily splits on one feature at a time along a single path.
+Tries to find rules which maximize the probability of class 1.
+Currently only supports binary classification.</p>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">&#39;&#39;&#39;Greedy rule list. Greedily splits on one feature at a time along a single path.
+<pre><code class="python">&#39;&#39;&#39;Greedy rule list.
+Greedily splits on one feature at a time along a single path.
+Tries to find rules which maximize the probability of class 1.
+Currently only supports binary classification.
 &#39;&#39;&#39;
 
 import math
-import numpy as np
 from copy import deepcopy
 
+import numpy as np
 from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.utils.multiclass import check_classification_targets, unique_labels
-from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
-
+from sklearn.utils.multiclass import unique_labels
+from sklearn.utils.validation import check_array, check_is_fitted
+from sklearn.tree import DecisionTreeClassifier
 from imodels.rule_list.rule_list import RuleList
+from imodels.util.arguments import check_fit_arguments
 
 
 class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
-    def __init__(self, max_depth: int = 5, class_weight=None, criterion: str = &#39;gini&#39;, strategy: str = &#39;max&#39;):
+    def __init__(self, max_depth: int = 5, class_weight=None,
+                 criterion: str = &#39;gini&#39;):
         &#39;&#39;&#39;
         Params
         ------
@@ -50,72 +53,68 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
             Maximum depth the list can achieve
         criterion: str
             Criterion used to split
-            &#39;gini&#39;, &#39;entropy&#39;, or &#39;neg_corr&#39;
-        strategy: str
-            How to select which side of split becomes leaf node
-            Currently only supports &#39;max&#39; - (higher risk side of split becomes leaf node)
+            &#39;gini&#39;, &#39;entropy&#39;, or &#39;log_loss&#39;
         &#39;&#39;&#39;
 
         self.max_depth = max_depth
         self.class_weight = class_weight
         self.criterion = criterion
-        self.strategy = strategy
         self.depth = 0  # tracks the fitted depth
 
-    def fit(self, x, y, depth: int = 0, feature_names=None, verbose=False):
+    def fit(self, X, y, depth: int = 0, feature_names=None, verbose=False):
         &#34;&#34;&#34;
         Params
         ------
-        x: array_like
+        X: array_like
             Feature set
         y: array_like
             target variable
         depth
             the depth of the current layer (used to recurse)
         &#34;&#34;&#34;
+        X, y, feature_names = check_fit_arguments(self, X, y, feature_names)
+        return self.fit_node_recursive(X, y, depth=0, verbose=verbose)
 
-        # set self.feature_names and make sure x, y are not pandas type
-        if &#39;pandas&#39; in str(type(x)):
-            x = x.values
-        else:
-            if feature_names is None:
-                self.feature_names_ = [&#39;feat &#39; + str(i) for i in range(x.shape[1])]
-        if feature_names is not None:
-            self.feature_names_ = feature_names
+    def fit_node_recursive(self, X, y, depth: int, verbose):
 
         # base case 1: no data in this group
-        if len(y) == 0:
+        if y.size == 0:
             return []
 
         # base case 2: all y is the same in this group
-        elif self.all_same(y):
+        elif np.all(y == y[0]):
             return [{&#39;val&#39;: y[0], &#39;num_pts&#39;: y.size}]
 
-        # base case 3: max depth reached 
-        elif depth &gt;= self.max_depth:
-            return []
+         # base case 3: max depth reached
+        elif depth == self.max_depth:
+            return [{&#39;val&#39;: np.mean(y), &#39;num_pts&#39;: y.size}]
 
-        # recursively generate rule list 
+        # recursively generate rule list
         else:
 
             # find a split with the best value for the criterion
-            col, cutoff, criterion_val = self.find_best_split(x, y)
+            m = DecisionTreeClassifier(max_depth=1, criterion=self.criterion)
+            m.fit(X, y)
+            col = m.tree_.feature[0]
+            cutoff = m.tree_.threshold[0]
+            # col, cutoff, criterion_val = self._find_best_split(X, y)
+            if col == -2:
+                return []
+                
+            y_left = y[X[:, col] &lt; cutoff]  # left-hand side data
+            y_right = y[X[:, col] &gt;= cutoff]  # right-hand side data
+
 
             # put higher probability of class 1 on the right-hand side
-            if self.strategy == &#39;max&#39;:
-                y_left = y[x[:, col] &lt; cutoff]  # left-hand side data
-                y_right = y[x[:, col] &gt;= cutoff]  # right-hand side data
-                if len(y_left) &gt; 0 and np.mean(y_left) &gt; np.mean(y_right):
-                    flip = True
-                    tmp = deepcopy(y_left)
-                    y_left = deepcopy(y_right)
-                    y_right = tmp
-                    x_left = x[x[:, col] &gt;= cutoff]
-                else:
-                    flip = False
-                    x_left = x[x[:, col] &lt; cutoff]
+            if len(y_left) &gt; 0 and np.mean(y_left) &gt; np.mean(y_right):
+                flip = True
+                tmp = deepcopy(y_left)
+                y_left = deepcopy(y_right)
+                y_right = tmp
+                x_left = X[X[:, col] &gt;= cutoff]
             else:
-                print(&#39;strategy must be max!&#39;)
+                flip = False
+                x_left = X[X[:, col] &lt; cutoff]
 
             # print
             if verbose:
@@ -127,7 +126,7 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
                 &#39;col&#39;: self.feature_names_[col],
                 &#39;index_col&#39;: col,
                 &#39;cutoff&#39;: cutoff,
-                &#39;val&#39;: np.mean(y),  # values before splitting
+                &#39;val&#39;: np.mean(y_left),  # will be the values before splitting in the next lower level
                 &#39;flip&#39;: flip,
                 &#39;val_right&#39;: np.mean(y_right),
                 &#39;num_pts&#39;: y.size,
@@ -135,7 +134,8 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
             }]
 
             # generate tree for the non-leaf data
-            par_node = par_node + self.fit(x_left, y_left, depth + 1, feature_names=feature_names, verbose=verbose)
+            par_node = par_node + \
+                self.fit_node_recursive(x_left, y_left, depth + 1, verbose=verbose)
 
             self.depth += 1  # increase the depth since we call fit once
             self.rules_ = par_node
@@ -153,7 +153,11 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
             for j, rule in enumerate(self.rules_):
                 if j == len(self.rules_) - 1:
                     probs[i] = rule[&#39;val&#39;]
-                elif x[rule[&#39;index_col&#39;]] &gt;= rule[&#39;cutoff&#39;]:
+                    continue
+                regular_condition = x[rule[&#34;index_col&#34;]] &gt;= rule[&#34;cutoff&#34;]
+                flipped_condition = x[rule[&#34;index_col&#34;]] &lt; rule[&#34;cutoff&#34;]
+                condition = flipped_condition if rule[&#34;flip&#34;] else regular_condition
+                if condition:
                     probs[i] = rule[&#39;val_right&#39;]
                     break
         return np.vstack((1 - probs, probs)).transpose()  # probs (n, 2)
@@ -163,48 +167,51 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
         X = check_array(X)
         return np.argmax(self.predict_proba(X), axis=1)
 
+    &#34;&#34;&#34;
     def __str__(self):
-        s = &#39;&#39;
-        for rule in self.rules_:
-            s += f&#34;mean {rule[&#39;val&#39;].round(3)} ({rule[&#39;num_pts&#39;]} pts)\n&#34;
-            if &#39;col&#39; in rule:
-                s += f&#34;if {rule[&#39;col&#39;]} &gt;= {rule[&#39;cutoff&#39;]} then {rule[&#39;val_right&#39;].round(3)} ({rule[&#39;num_pts_right&#39;]} pts)\n&#34;
-        return s
+        # s = &#39;&#39;
+        # for rule in self.rules_:
+        #     s += f&#34;mean {rule[&#39;val&#39;].round(3)} ({rule[&#39;num_pts&#39;]} pts)\n&#34;
+        #     if &#39;col&#39; in rule:
+        #         s += f&#34;if {rule[&#39;col&#39;]} &gt;= {rule[&#39;cutoff&#39;]} then {rule[&#39;val_right&#39;].round(3)} ({rule[&#39;num_pts_right&#39;]} pts)\n&#34;
+        # return s
+    &#34;&#34;&#34;
 
-    def print_list(self):
+    def __str__(self):
         &#39;&#39;&#39;Print out the list in a nice way
         &#39;&#39;&#39;
-        s = &#39;&#39;
+        s = &#39;&gt; ------------------------------\n&gt; Greedy Rule List\n&gt; ------------------------------\n&#39;
 
         def red(s):
-            return f&#34;\033[91m{s}\033[00m&#34;
+            # return f&#34;\033[91m{s}\033[00m&#34;
+            return s
 
         def cyan(s):
-            return f&#34;\033[96m{s}\033[00m&#34;
+            # return f&#34;\033[96m{s}\033[00m&#34;
+            return s
 
         def rule_name(rule):
             if rule[&#39;flip&#39;]:
                 return &#39;~&#39; + rule[&#39;col&#39;]
             return rule[&#39;col&#39;]
 
-        rule = self.rules_[0]
+        # rule = self.rules_[0]
         #     s += f&#34;{red((100 * rule[&#39;val&#39;]).round(3))}% IwI ({rule[&#39;num_pts&#39;]} pts)\n&#34;
         for rule in self.rules_:
-            s += f&#34;\t{&#39;&#39;:&gt;35} =&gt; {cyan((100 * rule[&#39;val&#39;]).round(2)):&gt;6}% risk ({rule[&#39;num_pts&#39;]} pts)\n&#34;
+            s += u&#39;\u2193\n&#39; + f&#34;{cyan((100 * rule[&#39;val&#39;]).round(2))}% risk ({rule[&#39;num_pts&#39;]} pts)\n&#34;
             #         s += f&#34;\t{&#39;Else&#39;:&gt;45} =&gt; {cyan((100 * rule[&#39;val&#39;]).round(2)):&gt;6}% IwI ({rule[&#39;val&#39;] * rule[&#39;num_pts&#39;]:.0f}/{rule[&#39;num_pts&#39;]} pts)\n&#34;
             if &#39;col&#39; in rule:
                 #             prefix = f&#34;if {rule[&#39;col&#39;]} &gt;= {rule[&#39;cutoff&#39;]}&#34;
                 prefix = f&#34;if {rule_name(rule)}&#34;
-                val = f&#34;{100 * rule[&#39;val_right&#39;].round(3):.4}&#34;
-                s += f&#34;{prefix:&gt;43} ===&gt; {red(val)}% risk ({rule[&#39;num_pts_right&#39;]} pts)\n&#34;
-        rule = self.rules_[-1]
+                val = f&#34;{100 * rule[&#39;val_right&#39;].round(3)}&#34;
+                s += f&#34;\t{prefix} ==&gt; {red(val)}% risk ({rule[&#39;num_pts_right&#39;]} pts)\n&#34;
+        # rule = self.rules_[-1]
         #     s += f&#34;{red((100 * rule[&#39;val&#39;]).round(3))}% IwI ({rule[&#39;num_pts&#39;]} pts)\n&#34;
-        print(s)
+        return s
 
-    def all_same(self, items):
-        return all(x == items[0] for x in items)
-
-    def find_best_split(self, x, y):
+    ######## HERE ONWARDS CUSTOM SPLITTING (DEPRECATED IN FAVOR OF SKLEARN STUMP) ########
+    ######################################################################################
+    def _find_best_split(self, x, y):
         &#34;&#34;&#34;
         Find the best split from all features
         returns: the column to split on, the cutoff value, and the actual criterion_value
@@ -217,7 +224,7 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
         for i, c in enumerate(x.T):
 
             # find the best split of that feature
-            criterion_val, cur_cutoff = self.split_on_feature(c, y)
+            criterion_val, cur_cutoff = self._split_on_feature(c, y)
 
             # found perfect cutoff
             if criterion_val == 0:
@@ -230,7 +237,7 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
                 cutoff = cur_cutoff
         return col, cutoff, min_criterion_val
 
-    def split_on_feature(self, col, y):
+    def _split_on_feature(self, col, y):
         &#34;&#34;&#34;
         col: the column we split on
         y: target var
@@ -244,7 +251,7 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
             y_predict = col &lt; value
 
             # get criterion val of this split
-            criterion_val = self.weighted_criterion(y_predict, y)
+            criterion_val = self._weighted_criterion(y_predict, y)
 
             # check if it&#39;s the smallest one so far
             if criterion_val &lt;= min_criterion_val:
@@ -252,7 +259,7 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
                 cutoff = value
         return min_criterion_val, cutoff
 
-    def weighted_criterion(self, split_decision, y_real):
+    def _weighted_criterion(self, split_decision, y_real):
         &#34;&#34;&#34;Returns criterion calculated over a split
         split decision, True/False, and y_true can be multi class
         &#34;&#34;&#34;
@@ -262,11 +269,11 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
 
         # choose the splitting criterion
         if self.criterion == &#39;entropy&#39;:
-            criterion_func = self.entropy_criterion
+            criterion_func = self._entropy_criterion
         elif self.criterion == &#39;gini&#39;:
-            criterion_func = self.gini_criterion
+            criterion_func = self._gini_criterion
         elif self.criterion == &#39;neg_corr&#39;:
-            return self.neg_corr_criterion(split_decision, y_real)
+            return self._neg_corr_criterion(split_decision, y_real)
 
         # left-hand side criterion
         s_left = criterion_func(y_real[split_decision])
@@ -291,7 +298,7 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
         s = weight_left * s_left + (1 - weight_left) * s_right
         return s
 
-    def gini_criterion(self, y):
+    def _gini_criterion(self, y):
         &#39;&#39;&#39;Returns gini index for one node
         = sum(pc * (1 – pc))
         &#39;&#39;&#39;
@@ -310,7 +317,7 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
 
         return s
 
-    def entropy_criterion(self, y):
+    def _entropy_criterion(self, y):
         &#34;&#34;&#34;Returns entropy of a divided group of data
         Data may have multiple classes
         &#34;&#34;&#34;
@@ -323,7 +330,7 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
             # weights for each class
             weight = sum(y == c) / n
 
-            def entropy_from_counts(c1, c2):
+            def _entropy_from_counts(c1, c2):
                 &#34;&#34;&#34;Returns entropy of a group of data
                 c1: count of one class
                 c2: count of another class
@@ -331,17 +338,17 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
                 if c1 == 0 or c2 == 0:  # when there is only one class in the group, entropy is 0
                     return 0
 
-                def entropy_func(p): return -p * math.log(p, 2)
+                def _entropy_func(p): return -p * math.log(p, 2)
 
                 p1 = c1 * 1.0 / (c1 + c2)
                 p2 = c2 * 1.0 / (c1 + c2)
-                return entropy_func(p1) + entropy_func(p2)
+                return _entropy_func(p1) + _entropy_func(p2)
 
             # weighted avg
-            s += weight * entropy_from_counts(sum(y == c), sum(y != c))
+            s += weight * _entropy_from_counts(sum(y == c), sum(y != c))
         return s
 
-    def neg_corr_criterion(self, split_decision, y):
+    def _neg_corr_criterion(self, split_decision, y):
         &#39;&#39;&#39;Returns negative correlation between y
         and the binary splitting variable split_decision
         y must be binary
@@ -369,29 +376,58 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
 <dl>
 <dt id="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier"><code class="flex name class">
 <span>class <span class="ident">GreedyRuleListClassifier</span></span>
-<span>(</span><span>max_depth: int = 5, class_weight=None, criterion: str = 'gini', strategy: str = 'max')</span>
+<span>(</span><span>max_depth: int = 5, class_weight=None, criterion: str = 'gini')</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Base class for all estimators in scikit-learn.</p>
+<p>Inheriting from this class provides default implementations of:</p>
+<ul>
+<li>setting and getting parameters used by <code>GridSearchCV</code> and friends;</li>
+<li>textual and HTML representation displayed in terminals and IDEs;</li>
+<li>estimator serialization;</li>
+<li>parameters validation;</li>
+<li>data validation;</li>
+<li>feature names validation.</li>
+</ul>
+<p>Read more in the :ref:<code>User Guide &lt;rolling_your_own_estimator&gt;</code>.</p>
 <h2 id="notes">Notes</h2>
 <p>All estimators should specify all the parameters that can be set
 at the class level in their <code>__init__</code> as explicit keyword
 arguments (no <code>*args</code> or <code>**kwargs</code>).</p>
+<h2 id="examples">Examples</h2>
+<pre><code class="language-python-repl">&gt;&gt;&gt; import numpy as np
+&gt;&gt;&gt; from sklearn.base import BaseEstimator
+&gt;&gt;&gt; class MyEstimator(BaseEstimator):
+...     def __init__(self, *, param=1):
+...         self.param = param
+...     def fit(self, X, y=None):
+...         self.is_fitted_ = True
+...         return self
+...     def predict(self, X):
+...         return np.full(shape=X.shape[0], fill_value=self.param)
+&gt;&gt;&gt; estimator = MyEstimator(param=2)
+&gt;&gt;&gt; estimator.get_params()
+{'param': 2}
+&gt;&gt;&gt; X = np.array([[1, 2], [2, 3], [3, 4]])
+&gt;&gt;&gt; y = np.array([1, 0, 1])
+&gt;&gt;&gt; estimator.fit(X, y).predict(X)
+array([2, 2, 2])
+&gt;&gt;&gt; estimator.set_params(param=3).fit(X, y).predict(X)
+array([3, 3, 3])
+</code></pre>
 <h2 id="params">Params</h2>
 <p>max_depth
 Maximum depth the list can achieve
 criterion: str
 Criterion used to split
-'gini', 'entropy', or 'neg_corr'
-strategy: str
-How to select which side of split becomes leaf node
-Currently only supports 'max' - (higher risk side of split becomes leaf node)</p></div>
+'gini', 'entropy', or 'log_loss'</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
-    def __init__(self, max_depth: int = 5, class_weight=None, criterion: str = &#39;gini&#39;, strategy: str = &#39;max&#39;):
+    def __init__(self, max_depth: int = 5, class_weight=None,
+                 criterion: str = &#39;gini&#39;):
         &#39;&#39;&#39;
         Params
         ------
@@ -399,72 +435,68 @@ Currently only supports 'max' - (higher risk side of split becomes leaf node)</p
             Maximum depth the list can achieve
         criterion: str
             Criterion used to split
-            &#39;gini&#39;, &#39;entropy&#39;, or &#39;neg_corr&#39;
-        strategy: str
-            How to select which side of split becomes leaf node
-            Currently only supports &#39;max&#39; - (higher risk side of split becomes leaf node)
+            &#39;gini&#39;, &#39;entropy&#39;, or &#39;log_loss&#39;
         &#39;&#39;&#39;
 
         self.max_depth = max_depth
         self.class_weight = class_weight
         self.criterion = criterion
-        self.strategy = strategy
         self.depth = 0  # tracks the fitted depth
 
-    def fit(self, x, y, depth: int = 0, feature_names=None, verbose=False):
+    def fit(self, X, y, depth: int = 0, feature_names=None, verbose=False):
         &#34;&#34;&#34;
         Params
         ------
-        x: array_like
+        X: array_like
             Feature set
         y: array_like
             target variable
         depth
             the depth of the current layer (used to recurse)
         &#34;&#34;&#34;
+        X, y, feature_names = check_fit_arguments(self, X, y, feature_names)
+        return self.fit_node_recursive(X, y, depth=0, verbose=verbose)
 
-        # set self.feature_names and make sure x, y are not pandas type
-        if &#39;pandas&#39; in str(type(x)):
-            x = x.values
-        else:
-            if feature_names is None:
-                self.feature_names_ = [&#39;feat &#39; + str(i) for i in range(x.shape[1])]
-        if feature_names is not None:
-            self.feature_names_ = feature_names
+    def fit_node_recursive(self, X, y, depth: int, verbose):
 
         # base case 1: no data in this group
-        if len(y) == 0:
+        if y.size == 0:
             return []
 
         # base case 2: all y is the same in this group
-        elif self.all_same(y):
+        elif np.all(y == y[0]):
             return [{&#39;val&#39;: y[0], &#39;num_pts&#39;: y.size}]
 
-        # base case 3: max depth reached 
-        elif depth &gt;= self.max_depth:
-            return []
+         # base case 3: max depth reached
+        elif depth == self.max_depth:
+            return [{&#39;val&#39;: np.mean(y), &#39;num_pts&#39;: y.size}]
 
-        # recursively generate rule list 
+        # recursively generate rule list
         else:
 
             # find a split with the best value for the criterion
-            col, cutoff, criterion_val = self.find_best_split(x, y)
+            m = DecisionTreeClassifier(max_depth=1, criterion=self.criterion)
+            m.fit(X, y)
+            col = m.tree_.feature[0]
+            cutoff = m.tree_.threshold[0]
+            # col, cutoff, criterion_val = self._find_best_split(X, y)
+            if col == -2:
+                return []
+                
+            y_left = y[X[:, col] &lt; cutoff]  # left-hand side data
+            y_right = y[X[:, col] &gt;= cutoff]  # right-hand side data
+
 
             # put higher probability of class 1 on the right-hand side
-            if self.strategy == &#39;max&#39;:
-                y_left = y[x[:, col] &lt; cutoff]  # left-hand side data
-                y_right = y[x[:, col] &gt;= cutoff]  # right-hand side data
-                if len(y_left) &gt; 0 and np.mean(y_left) &gt; np.mean(y_right):
-                    flip = True
-                    tmp = deepcopy(y_left)
-                    y_left = deepcopy(y_right)
-                    y_right = tmp
-                    x_left = x[x[:, col] &gt;= cutoff]
-                else:
-                    flip = False
-                    x_left = x[x[:, col] &lt; cutoff]
+            if len(y_left) &gt; 0 and np.mean(y_left) &gt; np.mean(y_right):
+                flip = True
+                tmp = deepcopy(y_left)
+                y_left = deepcopy(y_right)
+                y_right = tmp
+                x_left = X[X[:, col] &gt;= cutoff]
             else:
-                print(&#39;strategy must be max!&#39;)
+                flip = False
+                x_left = X[X[:, col] &lt; cutoff]
 
             # print
             if verbose:
@@ -476,7 +508,7 @@ Currently only supports 'max' - (higher risk side of split becomes leaf node)</p
                 &#39;col&#39;: self.feature_names_[col],
                 &#39;index_col&#39;: col,
                 &#39;cutoff&#39;: cutoff,
-                &#39;val&#39;: np.mean(y),  # values before splitting
+                &#39;val&#39;: np.mean(y_left),  # will be the values before splitting in the next lower level
                 &#39;flip&#39;: flip,
                 &#39;val_right&#39;: np.mean(y_right),
                 &#39;num_pts&#39;: y.size,
@@ -484,7 +516,8 @@ Currently only supports 'max' - (higher risk side of split becomes leaf node)</p
             }]
 
             # generate tree for the non-leaf data
-            par_node = par_node + self.fit(x_left, y_left, depth + 1, feature_names=feature_names, verbose=verbose)
+            par_node = par_node + \
+                self.fit_node_recursive(x_left, y_left, depth + 1, verbose=verbose)
 
             self.depth += 1  # increase the depth since we call fit once
             self.rules_ = par_node
@@ -502,7 +535,11 @@ Currently only supports 'max' - (higher risk side of split becomes leaf node)</p
             for j, rule in enumerate(self.rules_):
                 if j == len(self.rules_) - 1:
                     probs[i] = rule[&#39;val&#39;]
-                elif x[rule[&#39;index_col&#39;]] &gt;= rule[&#39;cutoff&#39;]:
+                    continue
+                regular_condition = x[rule[&#34;index_col&#34;]] &gt;= rule[&#34;cutoff&#34;]
+                flipped_condition = x[rule[&#34;index_col&#34;]] &lt; rule[&#34;cutoff&#34;]
+                condition = flipped_condition if rule[&#34;flip&#34;] else regular_condition
+                if condition:
                     probs[i] = rule[&#39;val_right&#39;]
                     break
         return np.vstack((1 - probs, probs)).transpose()  # probs (n, 2)
@@ -512,48 +549,51 @@ Currently only supports 'max' - (higher risk side of split becomes leaf node)</p
         X = check_array(X)
         return np.argmax(self.predict_proba(X), axis=1)
 
+    &#34;&#34;&#34;
     def __str__(self):
-        s = &#39;&#39;
-        for rule in self.rules_:
-            s += f&#34;mean {rule[&#39;val&#39;].round(3)} ({rule[&#39;num_pts&#39;]} pts)\n&#34;
-            if &#39;col&#39; in rule:
-                s += f&#34;if {rule[&#39;col&#39;]} &gt;= {rule[&#39;cutoff&#39;]} then {rule[&#39;val_right&#39;].round(3)} ({rule[&#39;num_pts_right&#39;]} pts)\n&#34;
-        return s
+        # s = &#39;&#39;
+        # for rule in self.rules_:
+        #     s += f&#34;mean {rule[&#39;val&#39;].round(3)} ({rule[&#39;num_pts&#39;]} pts)\n&#34;
+        #     if &#39;col&#39; in rule:
+        #         s += f&#34;if {rule[&#39;col&#39;]} &gt;= {rule[&#39;cutoff&#39;]} then {rule[&#39;val_right&#39;].round(3)} ({rule[&#39;num_pts_right&#39;]} pts)\n&#34;
+        # return s
+    &#34;&#34;&#34;
 
-    def print_list(self):
+    def __str__(self):
         &#39;&#39;&#39;Print out the list in a nice way
         &#39;&#39;&#39;
-        s = &#39;&#39;
+        s = &#39;&gt; ------------------------------\n&gt; Greedy Rule List\n&gt; ------------------------------\n&#39;
 
         def red(s):
-            return f&#34;\033[91m{s}\033[00m&#34;
+            # return f&#34;\033[91m{s}\033[00m&#34;
+            return s
 
         def cyan(s):
-            return f&#34;\033[96m{s}\033[00m&#34;
+            # return f&#34;\033[96m{s}\033[00m&#34;
+            return s
 
         def rule_name(rule):
             if rule[&#39;flip&#39;]:
                 return &#39;~&#39; + rule[&#39;col&#39;]
             return rule[&#39;col&#39;]
 
-        rule = self.rules_[0]
+        # rule = self.rules_[0]
         #     s += f&#34;{red((100 * rule[&#39;val&#39;]).round(3))}% IwI ({rule[&#39;num_pts&#39;]} pts)\n&#34;
         for rule in self.rules_:
-            s += f&#34;\t{&#39;&#39;:&gt;35} =&gt; {cyan((100 * rule[&#39;val&#39;]).round(2)):&gt;6}% risk ({rule[&#39;num_pts&#39;]} pts)\n&#34;
+            s += u&#39;\u2193\n&#39; + f&#34;{cyan((100 * rule[&#39;val&#39;]).round(2))}% risk ({rule[&#39;num_pts&#39;]} pts)\n&#34;
             #         s += f&#34;\t{&#39;Else&#39;:&gt;45} =&gt; {cyan((100 * rule[&#39;val&#39;]).round(2)):&gt;6}% IwI ({rule[&#39;val&#39;] * rule[&#39;num_pts&#39;]:.0f}/{rule[&#39;num_pts&#39;]} pts)\n&#34;
             if &#39;col&#39; in rule:
                 #             prefix = f&#34;if {rule[&#39;col&#39;]} &gt;= {rule[&#39;cutoff&#39;]}&#34;
                 prefix = f&#34;if {rule_name(rule)}&#34;
-                val = f&#34;{100 * rule[&#39;val_right&#39;].round(3):.4}&#34;
-                s += f&#34;{prefix:&gt;43} ===&gt; {red(val)}% risk ({rule[&#39;num_pts_right&#39;]} pts)\n&#34;
-        rule = self.rules_[-1]
+                val = f&#34;{100 * rule[&#39;val_right&#39;].round(3)}&#34;
+                s += f&#34;\t{prefix} ==&gt; {red(val)}% risk ({rule[&#39;num_pts_right&#39;]} pts)\n&#34;
+        # rule = self.rules_[-1]
         #     s += f&#34;{red((100 * rule[&#39;val&#39;]).round(3))}% IwI ({rule[&#39;num_pts&#39;]} pts)\n&#34;
-        print(s)
+        return s
 
-    def all_same(self, items):
-        return all(x == items[0] for x in items)
-
-    def find_best_split(self, x, y):
+    ######## HERE ONWARDS CUSTOM SPLITTING (DEPRECATED IN FAVOR OF SKLEARN STUMP) ########
+    ######################################################################################
+    def _find_best_split(self, x, y):
         &#34;&#34;&#34;
         Find the best split from all features
         returns: the column to split on, the cutoff value, and the actual criterion_value
@@ -566,7 +606,7 @@ Currently only supports 'max' - (higher risk side of split becomes leaf node)</p
         for i, c in enumerate(x.T):
 
             # find the best split of that feature
-            criterion_val, cur_cutoff = self.split_on_feature(c, y)
+            criterion_val, cur_cutoff = self._split_on_feature(c, y)
 
             # found perfect cutoff
             if criterion_val == 0:
@@ -579,7 +619,7 @@ Currently only supports 'max' - (higher risk side of split becomes leaf node)</p
                 cutoff = cur_cutoff
         return col, cutoff, min_criterion_val
 
-    def split_on_feature(self, col, y):
+    def _split_on_feature(self, col, y):
         &#34;&#34;&#34;
         col: the column we split on
         y: target var
@@ -593,7 +633,7 @@ Currently only supports 'max' - (higher risk side of split becomes leaf node)</p
             y_predict = col &lt; value
 
             # get criterion val of this split
-            criterion_val = self.weighted_criterion(y_predict, y)
+            criterion_val = self._weighted_criterion(y_predict, y)
 
             # check if it&#39;s the smallest one so far
             if criterion_val &lt;= min_criterion_val:
@@ -601,7 +641,7 @@ Currently only supports 'max' - (higher risk side of split becomes leaf node)</p
                 cutoff = value
         return min_criterion_val, cutoff
 
-    def weighted_criterion(self, split_decision, y_real):
+    def _weighted_criterion(self, split_decision, y_real):
         &#34;&#34;&#34;Returns criterion calculated over a split
         split decision, True/False, and y_true can be multi class
         &#34;&#34;&#34;
@@ -611,11 +651,11 @@ Currently only supports 'max' - (higher risk side of split becomes leaf node)</p
 
         # choose the splitting criterion
         if self.criterion == &#39;entropy&#39;:
-            criterion_func = self.entropy_criterion
+            criterion_func = self._entropy_criterion
         elif self.criterion == &#39;gini&#39;:
-            criterion_func = self.gini_criterion
+            criterion_func = self._gini_criterion
         elif self.criterion == &#39;neg_corr&#39;:
-            return self.neg_corr_criterion(split_decision, y_real)
+            return self._neg_corr_criterion(split_decision, y_real)
 
         # left-hand side criterion
         s_left = criterion_func(y_real[split_decision])
@@ -640,7 +680,7 @@ Currently only supports 'max' - (higher risk side of split becomes leaf node)</p
         s = weight_left * s_left + (1 - weight_left) * s_right
         return s
 
-    def gini_criterion(self, y):
+    def _gini_criterion(self, y):
         &#39;&#39;&#39;Returns gini index for one node
         = sum(pc * (1 – pc))
         &#39;&#39;&#39;
@@ -659,7 +699,7 @@ Currently only supports 'max' - (higher risk side of split becomes leaf node)</p
 
         return s
 
-    def entropy_criterion(self, y):
+    def _entropy_criterion(self, y):
         &#34;&#34;&#34;Returns entropy of a divided group of data
         Data may have multiple classes
         &#34;&#34;&#34;
@@ -672,7 +712,7 @@ Currently only supports 'max' - (higher risk side of split becomes leaf node)</p
             # weights for each class
             weight = sum(y == c) / n
 
-            def entropy_from_counts(c1, c2):
+            def _entropy_from_counts(c1, c2):
                 &#34;&#34;&#34;Returns entropy of a group of data
                 c1: count of one class
                 c2: count of another class
@@ -680,17 +720,17 @@ Currently only supports 'max' - (higher risk side of split becomes leaf node)</p
                 if c1 == 0 or c2 == 0:  # when there is only one class in the group, entropy is 0
                     return 0
 
-                def entropy_func(p): return -p * math.log(p, 2)
+                def _entropy_func(p): return -p * math.log(p, 2)
 
                 p1 = c1 * 1.0 / (c1 + c2)
                 p2 = c2 * 1.0 / (c1 + c2)
-                return entropy_func(p1) + entropy_func(p2)
+                return _entropy_func(p1) + _entropy_func(p2)
 
             # weighted avg
-            s += weight * entropy_from_counts(sum(y == c), sum(y != c))
+            s += weight * _entropy_from_counts(sum(y == c), sum(y != c))
         return s
 
-    def neg_corr_criterion(self, split_decision, y):
+    def _neg_corr_criterion(self, split_decision, y):
         &#39;&#39;&#39;Returns negative correlation between y
         and the binary splitting variable split_decision
         y must be binary
@@ -709,113 +749,24 @@ Currently only supports 'max' - (higher risk side of split becomes leaf node)</p
 <h3>Ancestors</h3>
 <ul class="hlist">
 <li>sklearn.base.BaseEstimator</li>
+<li>sklearn.utils._estimator_html_repr._HTMLDocumentationLinkMixin</li>
+<li>sklearn.utils._metadata_requests._MetadataRequester</li>
 <li><a title="imodels.rule_list.rule_list.RuleList" href="rule_list.html#imodels.rule_list.rule_list.RuleList">RuleList</a></li>
 <li>sklearn.base.ClassifierMixin</li>
 </ul>
 <h3>Subclasses</h3>
 <ul class="hlist">
+<li><a title="imodels.rule_list.corels_wrapper.OptimalRuleListClassifier" href="corels_wrapper.html#imodels.rule_list.corels_wrapper.OptimalRuleListClassifier">OptimalRuleListClassifier</a></li>
 <li><a title="imodels.rule_list.one_r.OneRClassifier" href="one_r.html#imodels.rule_list.one_r.OneRClassifier">OneRClassifier</a></li>
 </ul>
 <h3>Methods</h3>
 <dl>
-<dt id="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.all_same"><code class="name flex">
-<span>def <span class="ident">all_same</span></span>(<span>self, items)</span>
-</code></dt>
-<dd>
-<div class="desc"></div>
-<details class="source">
-<summary>
-<span>Expand source code</span>
-</summary>
-<pre><code class="python">def all_same(self, items):
-    return all(x == items[0] for x in items)</code></pre>
-</details>
-</dd>
-<dt id="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.entropy_criterion"><code class="name flex">
-<span>def <span class="ident">entropy_criterion</span></span>(<span>self, y)</span>
-</code></dt>
-<dd>
-<div class="desc"><p>Returns entropy of a divided group of data
-Data may have multiple classes</p></div>
-<details class="source">
-<summary>
-<span>Expand source code</span>
-</summary>
-<pre><code class="python">def entropy_criterion(self, y):
-    &#34;&#34;&#34;Returns entropy of a divided group of data
-    Data may have multiple classes
-    &#34;&#34;&#34;
-    s = 0
-    n = len(y)
-    classes = set(y)
-
-    # for each class, get entropy
-    for c in classes:
-        # weights for each class
-        weight = sum(y == c) / n
-
-        def entropy_from_counts(c1, c2):
-            &#34;&#34;&#34;Returns entropy of a group of data
-            c1: count of one class
-            c2: count of another class
-            &#34;&#34;&#34;
-            if c1 == 0 or c2 == 0:  # when there is only one class in the group, entropy is 0
-                return 0
-
-            def entropy_func(p): return -p * math.log(p, 2)
-
-            p1 = c1 * 1.0 / (c1 + c2)
-            p2 = c2 * 1.0 / (c1 + c2)
-            return entropy_func(p1) + entropy_func(p2)
-
-        # weighted avg
-        s += weight * entropy_from_counts(sum(y == c), sum(y != c))
-    return s</code></pre>
-</details>
-</dd>
-<dt id="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.find_best_split"><code class="name flex">
-<span>def <span class="ident">find_best_split</span></span>(<span>self, x, y)</span>
-</code></dt>
-<dd>
-<div class="desc"><p>Find the best split from all features
-returns: the column to split on, the cutoff value, and the actual criterion_value</p></div>
-<details class="source">
-<summary>
-<span>Expand source code</span>
-</summary>
-<pre><code class="python">def find_best_split(self, x, y):
-    &#34;&#34;&#34;
-    Find the best split from all features
-    returns: the column to split on, the cutoff value, and the actual criterion_value
-    &#34;&#34;&#34;
-    col = None
-    min_criterion_val = 1e10
-    cutoff = None
-
-    # iterating through each feature
-    for i, c in enumerate(x.T):
-
-        # find the best split of that feature
-        criterion_val, cur_cutoff = self.split_on_feature(c, y)
-
-        # found perfect cutoff
-        if criterion_val == 0:
-            return i, cur_cutoff, criterion_val
-
-        # check if it&#39;s best so far
-        elif criterion_val &lt;= min_criterion_val:
-            min_criterion_val = criterion_val
-            col = i
-            cutoff = cur_cutoff
-    return col, cutoff, min_criterion_val</code></pre>
-</details>
-</dd>
 <dt id="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.fit"><code class="name flex">
-<span>def <span class="ident">fit</span></span>(<span>self, x, y, depth: int = 0, feature_names=None, verbose=False)</span>
+<span>def <span class="ident">fit</span></span>(<span>self, X, y, depth: int = 0, feature_names=None, verbose=False)</span>
 </code></dt>
 <dd>
 <div class="desc"><h2 id="params">Params</h2>
-<p>x: array_like
+<p>X: array_like
 Feature set
 y: array_like
 target variable
@@ -825,60 +776,70 @@ the depth of the current layer (used to recurse)</p></div>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def fit(self, x, y, depth: int = 0, feature_names=None, verbose=False):
+<pre><code class="python">def fit(self, X, y, depth: int = 0, feature_names=None, verbose=False):
     &#34;&#34;&#34;
     Params
     ------
-    x: array_like
+    X: array_like
         Feature set
     y: array_like
         target variable
     depth
         the depth of the current layer (used to recurse)
     &#34;&#34;&#34;
-
-    # set self.feature_names and make sure x, y are not pandas type
-    if &#39;pandas&#39; in str(type(x)):
-        x = x.values
-    else:
-        if feature_names is None:
-            self.feature_names_ = [&#39;feat &#39; + str(i) for i in range(x.shape[1])]
-    if feature_names is not None:
-        self.feature_names_ = feature_names
+    X, y, feature_names = check_fit_arguments(self, X, y, feature_names)
+    return self.fit_node_recursive(X, y, depth=0, verbose=verbose)</code></pre>
+</details>
+</dd>
+<dt id="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.fit_node_recursive"><code class="name flex">
+<span>def <span class="ident">fit_node_recursive</span></span>(<span>self, X, y, depth: int, verbose)</span>
+</code></dt>
+<dd>
+<div class="desc"></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def fit_node_recursive(self, X, y, depth: int, verbose):
 
     # base case 1: no data in this group
-    if len(y) == 0:
+    if y.size == 0:
         return []
 
     # base case 2: all y is the same in this group
-    elif self.all_same(y):
+    elif np.all(y == y[0]):
         return [{&#39;val&#39;: y[0], &#39;num_pts&#39;: y.size}]
 
-    # base case 3: max depth reached 
-    elif depth &gt;= self.max_depth:
-        return []
+     # base case 3: max depth reached
+    elif depth == self.max_depth:
+        return [{&#39;val&#39;: np.mean(y), &#39;num_pts&#39;: y.size}]
 
-    # recursively generate rule list 
+    # recursively generate rule list
     else:
 
         # find a split with the best value for the criterion
-        col, cutoff, criterion_val = self.find_best_split(x, y)
+        m = DecisionTreeClassifier(max_depth=1, criterion=self.criterion)
+        m.fit(X, y)
+        col = m.tree_.feature[0]
+        cutoff = m.tree_.threshold[0]
+        # col, cutoff, criterion_val = self._find_best_split(X, y)
+        if col == -2:
+            return []
+            
+        y_left = y[X[:, col] &lt; cutoff]  # left-hand side data
+        y_right = y[X[:, col] &gt;= cutoff]  # right-hand side data
+
 
         # put higher probability of class 1 on the right-hand side
-        if self.strategy == &#39;max&#39;:
-            y_left = y[x[:, col] &lt; cutoff]  # left-hand side data
-            y_right = y[x[:, col] &gt;= cutoff]  # right-hand side data
-            if len(y_left) &gt; 0 and np.mean(y_left) &gt; np.mean(y_right):
-                flip = True
-                tmp = deepcopy(y_left)
-                y_left = deepcopy(y_right)
-                y_right = tmp
-                x_left = x[x[:, col] &gt;= cutoff]
-            else:
-                flip = False
-                x_left = x[x[:, col] &lt; cutoff]
+        if len(y_left) &gt; 0 and np.mean(y_left) &gt; np.mean(y_right):
+            flip = True
+            tmp = deepcopy(y_left)
+            y_left = deepcopy(y_right)
+            y_right = tmp
+            x_left = X[X[:, col] &gt;= cutoff]
         else:
-            print(&#39;strategy must be max!&#39;)
+            flip = False
+            x_left = X[X[:, col] &lt; cutoff]
 
         # print
         if verbose:
@@ -890,7 +851,7 @@ the depth of the current layer (used to recurse)</p></div>
             &#39;col&#39;: self.feature_names_[col],
             &#39;index_col&#39;: col,
             &#39;cutoff&#39;: cutoff,
-            &#39;val&#39;: np.mean(y),  # values before splitting
+            &#39;val&#39;: np.mean(y_left),  # will be the values before splitting in the next lower level
             &#39;flip&#39;: flip,
             &#39;val_right&#39;: np.mean(y_right),
             &#39;num_pts&#39;: y.size,
@@ -898,71 +859,14 @@ the depth of the current layer (used to recurse)</p></div>
         }]
 
         # generate tree for the non-leaf data
-        par_node = par_node + self.fit(x_left, y_left, depth + 1, feature_names=feature_names, verbose=verbose)
+        par_node = par_node + \
+            self.fit_node_recursive(x_left, y_left, depth + 1, verbose=verbose)
 
         self.depth += 1  # increase the depth since we call fit once
         self.rules_ = par_node
         self.complexity_ = len(self.rules_)
         self.classes_ = unique_labels(y)
         return par_node</code></pre>
-</details>
-</dd>
-<dt id="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.gini_criterion"><code class="name flex">
-<span>def <span class="ident">gini_criterion</span></span>(<span>self, y)</span>
-</code></dt>
-<dd>
-<div class="desc"><p>Returns gini index for one node
-= sum(pc * (1 – pc))</p></div>
-<details class="source">
-<summary>
-<span>Expand source code</span>
-</summary>
-<pre><code class="python">def gini_criterion(self, y):
-    &#39;&#39;&#39;Returns gini index for one node
-    = sum(pc * (1 – pc))
-    &#39;&#39;&#39;
-    s = 0
-    n = y.shape[0]
-    classes = np.unique(y)
-
-    # for each class, get entropy
-    for c in classes:
-        # weights for each class
-        n_c = np.sum(y == c)
-        p_c = n_c / n
-
-        # weighted avg
-        s += p_c * (1 - p_c)
-
-    return s</code></pre>
-</details>
-</dd>
-<dt id="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.neg_corr_criterion"><code class="name flex">
-<span>def <span class="ident">neg_corr_criterion</span></span>(<span>self, split_decision, y)</span>
-</code></dt>
-<dd>
-<div class="desc"><p>Returns negative correlation between y
-and the binary splitting variable split_decision
-y must be binary</p></div>
-<details class="source">
-<summary>
-<span>Expand source code</span>
-</summary>
-<pre><code class="python">def neg_corr_criterion(self, split_decision, y):
-    &#39;&#39;&#39;Returns negative correlation between y
-    and the binary splitting variable split_decision
-    y must be binary
-    &#39;&#39;&#39;
-    if np.unique(y).size &lt; 2:
-        return 0
-    elif np.unique(y).size != 2:
-        print(&#39;y must be binary output for corr criterion&#39;)
-
-    # y should be 1 more often on the &#34;right side&#34; of the split
-    if y.sum() &lt; y.size / 2:
-        y = 1 - y
-
-    return -1 * np.corrcoef(split_decision.astype(np.int), y)[0, 1]</code></pre>
 </details>
 </dd>
 <dt id="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.predict"><code class="name flex">
@@ -999,133 +903,216 @@ y must be binary</p></div>
         for j, rule in enumerate(self.rules_):
             if j == len(self.rules_) - 1:
                 probs[i] = rule[&#39;val&#39;]
-            elif x[rule[&#39;index_col&#39;]] &gt;= rule[&#39;cutoff&#39;]:
+                continue
+            regular_condition = x[rule[&#34;index_col&#34;]] &gt;= rule[&#34;cutoff&#34;]
+            flipped_condition = x[rule[&#34;index_col&#34;]] &lt; rule[&#34;cutoff&#34;]
+            condition = flipped_condition if rule[&#34;flip&#34;] else regular_condition
+            if condition:
                 probs[i] = rule[&#39;val_right&#39;]
                 break
     return np.vstack((1 - probs, probs)).transpose()  # probs (n, 2)</code></pre>
 </details>
 </dd>
-<dt id="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.print_list"><code class="name flex">
-<span>def <span class="ident">print_list</span></span>(<span>self)</span>
+<dt id="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.set_fit_request"><code class="name flex">
+<span>def <span class="ident">set_fit_request</span></span>(<span>self: <a title="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier" href="#imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier">GreedyRuleListClassifier</a>, *, depth: Union[bool, ForwardRef(None), str] = '$UNCHANGED$', feature_names: Union[bool, ForwardRef(None), str] = '$UNCHANGED$', verbose: Union[bool, ForwardRef(None), str] = '$UNCHANGED$') ‑> <a title="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier" href="#imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier">GreedyRuleListClassifier</a></span>
 </code></dt>
 <dd>
-<div class="desc"><p>Print out the list in a nice way</p></div>
+<div class="desc"><p>Request metadata passed to the <code>fit</code> method.</p>
+<p>Note that this method is only relevant if
+<code>enable_metadata_routing=True</code> (see :func:<code>sklearn.set_config</code>).
+Please see :ref:<code>User Guide &lt;metadata_routing&gt;</code> on how the routing
+mechanism works.</p>
+<p>The options for each parameter are:</p>
+<ul>
+<li>
+<p><code>True</code>: metadata is requested, and passed to <code>fit</code> if provided. The request is ignored if metadata is not provided.</p>
+</li>
+<li>
+<p><code>False</code>: metadata is not requested and the meta-estimator will not pass it to <code>fit</code>.</p>
+</li>
+<li>
+<p><code>None</code>: metadata is not requested, and the meta-estimator will raise an error if the user provides it.</p>
+</li>
+<li>
+<p><code>str</code>: metadata should be passed to the meta-estimator with this given alias instead of the original name.</p>
+</li>
+</ul>
+<p>The default (<code>sklearn.utils.metadata_routing.UNCHANGED</code>) retains the
+existing request. This allows you to change the request for some
+parameters and not others.</p>
+<div class="admonition versionadded">
+<p class="admonition-title">Added in version:&ensp;1.3</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This method is only relevant if this estimator is used as a
+sub-estimator of a meta-estimator, e.g. used inside a
+:class:<code>~sklearn.pipeline.Pipeline</code>. Otherwise it has no effect.</p>
+</div>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>depth</code></strong> :&ensp;<code>str, True, False,</code> or <code>None</code>,
+default=<code>sklearn.utils.metadata_routing.UNCHANGED</code></dt>
+<dd>Metadata routing for <code>depth</code> parameter in <code>fit</code>.</dd>
+<dt><strong><code>feature_names</code></strong> :&ensp;<code>str, True, False,</code> or <code>None</code>,
+default=<code>sklearn.utils.metadata_routing.UNCHANGED</code></dt>
+<dd>Metadata routing for <code>feature_names</code> parameter in <code>fit</code>.</dd>
+<dt><strong><code>verbose</code></strong> :&ensp;<code>str, True, False,</code> or <code>None</code>,
+default=<code>sklearn.utils.metadata_routing.UNCHANGED</code></dt>
+<dd>Metadata routing for <code>verbose</code> parameter in <code>fit</code>.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><strong><code>self</code></strong> :&ensp;<code>object</code></dt>
+<dd>The updated object.</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def print_list(self):
-    &#39;&#39;&#39;Print out the list in a nice way
-    &#39;&#39;&#39;
-    s = &#39;&#39;
+<pre><code class="python">def func(*args, **kw):
+    &#34;&#34;&#34;Updates the request for provided parameters
 
-    def red(s):
-        return f&#34;\033[91m{s}\033[00m&#34;
-
-    def cyan(s):
-        return f&#34;\033[96m{s}\033[00m&#34;
-
-    def rule_name(rule):
-        if rule[&#39;flip&#39;]:
-            return &#39;~&#39; + rule[&#39;col&#39;]
-        return rule[&#39;col&#39;]
-
-    rule = self.rules_[0]
-    #     s += f&#34;{red((100 * rule[&#39;val&#39;]).round(3))}% IwI ({rule[&#39;num_pts&#39;]} pts)\n&#34;
-    for rule in self.rules_:
-        s += f&#34;\t{&#39;&#39;:&gt;35} =&gt; {cyan((100 * rule[&#39;val&#39;]).round(2)):&gt;6}% risk ({rule[&#39;num_pts&#39;]} pts)\n&#34;
-        #         s += f&#34;\t{&#39;Else&#39;:&gt;45} =&gt; {cyan((100 * rule[&#39;val&#39;]).round(2)):&gt;6}% IwI ({rule[&#39;val&#39;] * rule[&#39;num_pts&#39;]:.0f}/{rule[&#39;num_pts&#39;]} pts)\n&#34;
-        if &#39;col&#39; in rule:
-            #             prefix = f&#34;if {rule[&#39;col&#39;]} &gt;= {rule[&#39;cutoff&#39;]}&#34;
-            prefix = f&#34;if {rule_name(rule)}&#34;
-            val = f&#34;{100 * rule[&#39;val_right&#39;].round(3):.4}&#34;
-            s += f&#34;{prefix:&gt;43} ===&gt; {red(val)}% risk ({rule[&#39;num_pts_right&#39;]} pts)\n&#34;
-    rule = self.rules_[-1]
-    #     s += f&#34;{red((100 * rule[&#39;val&#39;]).round(3))}% IwI ({rule[&#39;num_pts&#39;]} pts)\n&#34;
-    print(s)</code></pre>
-</details>
-</dd>
-<dt id="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.split_on_feature"><code class="name flex">
-<span>def <span class="ident">split_on_feature</span></span>(<span>self, col, y)</span>
-</code></dt>
-<dd>
-<div class="desc"><p>col: the column we split on
-y: target var</p></div>
-<details class="source">
-<summary>
-<span>Expand source code</span>
-</summary>
-<pre><code class="python">def split_on_feature(self, col, y):
+    This docstring is overwritten below.
+    See REQUESTER_DOC for expected functionality
     &#34;&#34;&#34;
-    col: the column we split on
-    y: target var
-    &#34;&#34;&#34;
-    min_criterion_val = 1e10
-    cutoff = 0.5
+    if not _routing_enabled():
+        raise RuntimeError(
+            &#34;This method is only available when metadata routing is enabled.&#34;
+            &#34; You can enable it using&#34;
+            &#34; sklearn.set_config(enable_metadata_routing=True).&#34;
+        )
 
-    # iterate through each value in the column
-    for value in np.unique(col):
-        # separate y into 2 groups
-        y_predict = col &lt; value
+    if self.validate_keys and (set(kw) - set(self.keys)):
+        raise TypeError(
+            f&#34;Unexpected args: {set(kw) - set(self.keys)} in {self.name}. &#34;
+            f&#34;Accepted arguments are: {set(self.keys)}&#34;
+        )
 
-        # get criterion val of this split
-        criterion_val = self.weighted_criterion(y_predict, y)
-
-        # check if it&#39;s the smallest one so far
-        if criterion_val &lt;= min_criterion_val:
-            min_criterion_val = criterion_val
-            cutoff = value
-    return min_criterion_val, cutoff</code></pre>
-</details>
-</dd>
-<dt id="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.weighted_criterion"><code class="name flex">
-<span>def <span class="ident">weighted_criterion</span></span>(<span>self, split_decision, y_real)</span>
-</code></dt>
-<dd>
-<div class="desc"><p>Returns criterion calculated over a split
-split decision, True/False, and y_true can be multi class</p></div>
-<details class="source">
-<summary>
-<span>Expand source code</span>
-</summary>
-<pre><code class="python">def weighted_criterion(self, split_decision, y_real):
-    &#34;&#34;&#34;Returns criterion calculated over a split
-    split decision, True/False, and y_true can be multi class
-    &#34;&#34;&#34;
-    if split_decision.shape[0] != y_real.shape[0]:
-        print(&#39;They have to be the same length&#39;)
-        return None
-
-    # choose the splitting criterion
-    if self.criterion == &#39;entropy&#39;:
-        criterion_func = self.entropy_criterion
-    elif self.criterion == &#39;gini&#39;:
-        criterion_func = self.gini_criterion
-    elif self.criterion == &#39;neg_corr&#39;:
-        return self.neg_corr_criterion(split_decision, y_real)
-
-    # left-hand side criterion
-    s_left = criterion_func(y_real[split_decision])
-
-    # right-hand side criterion
-    s_right = criterion_func(y_real[~split_decision])
-
-    # overall criterion, again weighted average
-    n = y_real.shape[0]
-    if self.class_weight is not None:
-        sample_weights = np.ones(n)
-        for c in self.class_weight.keys():
-            idxs_c = y_real == c
-            sample_weights[idxs_c] = self.class_weight[c]
-        total_weight = np.sum(sample_weights)
-        weight_left = np.sum(sample_weights[split_decision]) / total_weight
-        # weight_right = np.sum(sample_weights[~split_decision]) / total_weight
+    # This makes it possible to use the decorated method as an unbound method,
+    # for instance when monkeypatching.
+    # https://github.com/scikit-learn/scikit-learn/issues/28632
+    if instance is None:
+        _instance = args[0]
+        args = args[1:]
     else:
-        tot_left_samples = np.sum(split_decision == 1)
-        weight_left = tot_left_samples / n
+        _instance = instance
 
-    s = weight_left * s_left + (1 - weight_left) * s_right
-    return s</code></pre>
+    # Replicating python&#39;s behavior when positional args are given other than
+    # `self`, and `self` is only allowed if this method is unbound.
+    if args:
+        raise TypeError(
+            f&#34;set_{self.name}_request() takes 0 positional argument but&#34;
+            f&#34; {len(args)} were given&#34;
+        )
+
+    requests = _instance._get_metadata_request()
+    method_metadata_request = getattr(requests, self.name)
+
+    for prop, alias in kw.items():
+        if alias is not UNCHANGED:
+            method_metadata_request.add_request(param=prop, alias=alias)
+    _instance._metadata_request = requests
+
+    return _instance</code></pre>
+</details>
+</dd>
+<dt id="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.set_score_request"><code class="name flex">
+<span>def <span class="ident">set_score_request</span></span>(<span>self: <a title="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier" href="#imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier">GreedyRuleListClassifier</a>, *, sample_weight: Union[bool, ForwardRef(None), str] = '$UNCHANGED$') ‑> <a title="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier" href="#imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier">GreedyRuleListClassifier</a></span>
+</code></dt>
+<dd>
+<div class="desc"><p>Request metadata passed to the <code>score</code> method.</p>
+<p>Note that this method is only relevant if
+<code>enable_metadata_routing=True</code> (see :func:<code>sklearn.set_config</code>).
+Please see :ref:<code>User Guide &lt;metadata_routing&gt;</code> on how the routing
+mechanism works.</p>
+<p>The options for each parameter are:</p>
+<ul>
+<li>
+<p><code>True</code>: metadata is requested, and passed to <code>score</code> if provided. The request is ignored if metadata is not provided.</p>
+</li>
+<li>
+<p><code>False</code>: metadata is not requested and the meta-estimator will not pass it to <code>score</code>.</p>
+</li>
+<li>
+<p><code>None</code>: metadata is not requested, and the meta-estimator will raise an error if the user provides it.</p>
+</li>
+<li>
+<p><code>str</code>: metadata should be passed to the meta-estimator with this given alias instead of the original name.</p>
+</li>
+</ul>
+<p>The default (<code>sklearn.utils.metadata_routing.UNCHANGED</code>) retains the
+existing request. This allows you to change the request for some
+parameters and not others.</p>
+<div class="admonition versionadded">
+<p class="admonition-title">Added in version:&ensp;1.3</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This method is only relevant if this estimator is used as a
+sub-estimator of a meta-estimator, e.g. used inside a
+:class:<code>~sklearn.pipeline.Pipeline</code>. Otherwise it has no effect.</p>
+</div>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>sample_weight</code></strong> :&ensp;<code>str, True, False,</code> or <code>None</code>,
+default=<code>sklearn.utils.metadata_routing.UNCHANGED</code></dt>
+<dd>Metadata routing for <code>sample_weight</code> parameter in <code>score</code>.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><strong><code>self</code></strong> :&ensp;<code>object</code></dt>
+<dd>The updated object.</dd>
+</dl></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def func(*args, **kw):
+    &#34;&#34;&#34;Updates the request for provided parameters
+
+    This docstring is overwritten below.
+    See REQUESTER_DOC for expected functionality
+    &#34;&#34;&#34;
+    if not _routing_enabled():
+        raise RuntimeError(
+            &#34;This method is only available when metadata routing is enabled.&#34;
+            &#34; You can enable it using&#34;
+            &#34; sklearn.set_config(enable_metadata_routing=True).&#34;
+        )
+
+    if self.validate_keys and (set(kw) - set(self.keys)):
+        raise TypeError(
+            f&#34;Unexpected args: {set(kw) - set(self.keys)} in {self.name}. &#34;
+            f&#34;Accepted arguments are: {set(self.keys)}&#34;
+        )
+
+    # This makes it possible to use the decorated method as an unbound method,
+    # for instance when monkeypatching.
+    # https://github.com/scikit-learn/scikit-learn/issues/28632
+    if instance is None:
+        _instance = args[0]
+        args = args[1:]
+    else:
+        _instance = instance
+
+    # Replicating python&#39;s behavior when positional args are given other than
+    # `self`, and `self` is only allowed if this method is unbound.
+    if args:
+        raise TypeError(
+            f&#34;set_{self.name}_request() takes 0 positional argument but&#34;
+            f&#34; {len(args)} were given&#34;
+        )
+
+    requests = _instance._get_metadata_request()
+    method_metadata_request = getattr(requests, self.name)
+
+    for prop, alias in kw.items():
+        if alias is not UNCHANGED:
+            method_metadata_request.add_request(param=prop, alias=alias)
+    _instance._metadata_request = requests
+
+    return _instance</code></pre>
 </details>
 </dd>
 </dl>
@@ -1134,7 +1121,7 @@ split decision, True/False, and y_true can be multi class</p></div>
 </section>
 </article>
 <nav id="sidebar">
-<h1>Index</h1>
+<h1>Index 🔍</h1>
 <div class="toc">
 <ul></ul>
 </div>
@@ -1149,26 +1136,26 @@ split decision, True/False, and y_true can be multi class</p></div>
 <li>
 <h4><code><a title="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier" href="#imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier">GreedyRuleListClassifier</a></code></h4>
 <ul class="two-column">
-<li><code><a title="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.all_same" href="#imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.all_same">all_same</a></code></li>
-<li><code><a title="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.entropy_criterion" href="#imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.entropy_criterion">entropy_criterion</a></code></li>
-<li><code><a title="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.find_best_split" href="#imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.find_best_split">find_best_split</a></code></li>
 <li><code><a title="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.fit" href="#imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.fit">fit</a></code></li>
-<li><code><a title="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.gini_criterion" href="#imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.gini_criterion">gini_criterion</a></code></li>
-<li><code><a title="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.neg_corr_criterion" href="#imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.neg_corr_criterion">neg_corr_criterion</a></code></li>
+<li><code><a title="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.fit_node_recursive" href="#imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.fit_node_recursive">fit_node_recursive</a></code></li>
 <li><code><a title="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.predict" href="#imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.predict">predict</a></code></li>
 <li><code><a title="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.predict_proba" href="#imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.predict_proba">predict_proba</a></code></li>
-<li><code><a title="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.print_list" href="#imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.print_list">print_list</a></code></li>
-<li><code><a title="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.split_on_feature" href="#imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.split_on_feature">split_on_feature</a></code></li>
-<li><code><a title="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.weighted_criterion" href="#imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.weighted_criterion">weighted_criterion</a></code></li>
+<li><code><a title="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.set_fit_request" href="#imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.set_fit_request">set_fit_request</a></code></li>
+<li><code><a title="imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.set_score_request" href="#imodels.rule_list.greedy_rule_list.GreedyRuleListClassifier.set_score_request">set_score_request</a></code></li>
 </ul>
 </li>
 </ul>
 </li>
 </ul>
+<p><img align="center" width=100% src="https://csinva.io/imodels/img/anim.gif"> </img></p>
+<!-- add wave animation -->
 </nav>
 </main>
 <footer id="footer">
-<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.10.0</a>.</p>
 </footer>
 </body>
 </html>
+<!-- add github corner -->
+<a href="https://github.com/csinva/imodels" class="github-corner" aria-label="View source on GitHub"><svg width="120" height="120" viewBox="0 0 250 250" style="fill:#70B7FD; color:#fff; position: absolute; top: 0; border: 0; right: 0;" aria-hidden="true"><path d="M0,0 L115,115 L130,115 L142,142 L250,250 L250,0 Z"></path><path d="m128.3,109.0 c113.8,99.7 119.0,89.6 119.0,89.6 c122.0,82.7 120.5,78.6 120.5,78.6 c119.2,72.0 123.4,76.3 123.4,76.3 c127.3,80.9 125.5,87.3 125.5,87.3 c122.9,97.6 130.6,101.9 134.4,103.2" fill="currentcolor" style="transform-origin: 130px 106px;" class="octo-arm"></path><path d="M115.0,115.0 C114.9,115.1 118.7,116.5 119.8,115.4 L133.7,101.6 C136.9,99.2 139.9,98.4 142.2,98.6 C133.8,88.0 127.5,74.4 143.8,58.0 C148.5,53.4 154.0,51.2 159.7,51.0 C160.3,49.4 163.2,43.6 171.4,40.1 C171.4,40.1 176.1,42.5 178.8,56.2 C183.1,58.6 187.2,61.8 190.9,65.4 C194.5,69.0 197.7,73.2 200.1,77.6 C213.8,80.2 216.3,84.9 216.3,84.9 C212.7,93.1 206.9,96.0 205.4,96.6 C205.1,102.4 203.0,107.8 198.3,112.5 C181.9,128.9 168.3,122.5 157.7,114.1 C157.9,116.9 156.7,120.9 152.7,124.9 L141.0,136.5 C139.8,137.7 141.6,141.9 141.8,141.8 Z" fill="currentColor" class="octo-body"></path></svg></a><style>.github-corner:hover .octo-arm{animation:octocat-wave 560ms ease-in-out}@keyframes octocat-wave{0%,100%{transform:rotate(0)}20%,60%{transform:rotate(-25deg)}40%,80%{transform:rotate(10deg)}}@media (max-width:500px){.github-corner:hover .octo-arm{animation:none}.github-corner .octo-arm{animation:octocat-wave 560ms ease-in-out}}</style>
+<!-- add wave animation stylesheet -->
+<link rel="stylesheet" href="github.css">

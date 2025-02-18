@@ -4,44 +4,48 @@ import numpy as np
 from imodels import *  # noqa: F403
 
 
-class TestClassClassificationBinary:
+class TestClassClassificationContinuousInputs:
     '''Tests simple classification for different models. Note: still doesn't test all the models!
     '''
 
-    def setup(self):
+    def setup_method(self):
         np.random.seed(13)
         random.seed(13)
         self.n = 40
         self.p = 2
         self.X_classification_binary = np.random.randn(self.n, self.p)
-        
+
         # y = x0 > 0
-        self.y_classification_binary = (self.X_classification_binary[:, 0] > 0).astype(int)
+        self.y_classification_binary = (
+            self.X_classification_binary[:, 0] > 0).astype(int)
 
         # flip labels for last few
-        self.y_classification_binary[-2:] = 1 - self.y_classification_binary[-2:]
+        self.y_classification_binary[-2:] = 1 - \
+            self.y_classification_binary[-2:]
 
     def test_classification_binary(self):
         '''Test imodels on basic binary classification task
         '''
 
         for model_type in [
+            BoostedRulesClassifier,
+            TaoTreeClassifier,
             RuleFitClassifier, GreedyRuleListClassifier,
-            FPLassoClassifier, SkopeRulesClassifier,
-            FPSkopeClassifier, BoostedRulesClassifier,
+            SkopeRulesClassifier,
             OneRClassifier, SlipperClassifier,
-            GreedyTreeClassifier,
-            OptimalTreeClassifier,
-            C45TreeClassifier,
-            FIGSClassifier,
+            GreedyTreeClassifier, OptimalTreeClassifier,
+            C45TreeClassifier, FIGSClassifier,
+            TreeGAMClassifier,
         ]:  # IRFClassifier, SLIMClassifier, BayesianRuleSetClassifier,
 
             init_kwargs = {}
             if model_type == SkopeRulesClassifier or model_type == FPSkopeClassifier:
                 init_kwargs['random_state'] = 0
                 init_kwargs['max_samples_features'] = 1.
-            if model_type == SlipperClassifier:
+            elif model_type == SlipperClassifier:
                 init_kwargs['n_estimators'] = 1
+            elif model_type == TreeGAMClassifier:
+                init_kwargs['n_boosting_rounds'] = 10
             m = model_type(**init_kwargs)
 
             X = self.X_classification_binary
@@ -56,17 +60,18 @@ class TestClassClassificationBinary:
                 preds_proba = m.predict_proba(X)
                 assert len(preds_proba.shape) == 2, 'preds_proba has 2 columns'
                 assert preds_proba.shape[1] == 2, 'preds_proba has 2 columns'
-                assert np.max(preds_proba) < 1.1, 'preds_proba has no values over 1'
+                assert np.max(
+                    preds_proba) < 1.1, 'preds_proba has no values over 1'
                 assert (np.argmax(preds_proba, axis=1) == preds).all(), ("predict_proba and "
                                                                          "predict agree")
 
             # test acc
             acc_train = np.mean(preds == self.y_classification_binary)
-            print(type(m), m, 'final acc', acc_train)
+            # print(type(m), m, 'final acc', acc_train)
             assert acc_train > 0.8, 'acc greater than 0.8'
 
 
 if __name__ == '__main__':
-    t = TestClassClassificationBinary()
-    t.setup()
+    t = TestClassClassificationContinuousInputs()
+    t.setup_method()
     t.test_classification_binary()

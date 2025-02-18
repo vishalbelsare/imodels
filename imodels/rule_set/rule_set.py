@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 from sklearn.utils.validation import check_array, check_is_fitted
-from typing import Tuple, List, Dict
 
 
 class RuleSet:
@@ -15,7 +14,7 @@ class RuleSet:
     def _prune_rules(self, rules):
         pass
 
-    def eval_weighted_rule_sum(self, X) -> np.ndarray:
+    def _eval_weighted_rule_sum(self, X) -> np.ndarray:
 
         check_is_fitted(self, ['rules_without_feature_names_', 'n_features_', 'feature_placeholders'])
         X = check_array(X)
@@ -30,7 +29,7 @@ class RuleSet:
 
         scores = np.zeros(X.shape[0])
         for r in selected_rules: 
-            features_r_uses = list(map(lambda x: x[0], r.agg_dict.keys()))
+            features_r_uses = list(set(map(lambda x: x[0], r.agg_dict.keys())))
             scores[df[features_r_uses].query(str(r)).index.values] += r.args[0]
 
         return scores

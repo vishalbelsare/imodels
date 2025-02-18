@@ -4,8 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1" />
 <meta name="generator" content="pdoc 0.10.0" />
-<title>imodels.experimental.bartpy.samplers.unconstrainedtree.likihoodratio API documentation</title>
-<meta name="description" content="" />
 <link rel="preload stylesheet" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/11.0.1/sanitize.min.css" integrity="sha256-PK9q560IAAa6WVRRh76LtCaI8pjTJ2z11v0miyNNjrs=" crossorigin>
 <link rel="preload stylesheet" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/11.0.1/typography.min.css" integrity="sha256-7l/o7C8jubJiy74VsKTidCy1yBkRtiUGbVkYBylBqUg=" crossorigin>
 <link rel="stylesheet preload" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/10.1.1/styles/github.min.css" crossorigin>
@@ -18,9 +16,6 @@
 <body>
 <main>
 <article id="content">
-<header>
-<h1 class="title">Module <code>imodels.experimental.bartpy.samplers.unconstrainedtree.likihoodratio</code></h1>
-</header>
 <section id="section-intro">
 <details class="source">
 <summary>
@@ -30,23 +25,24 @@
 
 import numpy as np
 
-from imodels.experimental.bartpy.model import Model
-from imodels.experimental.bartpy.mutation import TreeMutation, GrowMutation, PruneMutation
-from imodels.experimental.bartpy.node import LeafNode, TreeNode
-from imodels.experimental.bartpy.samplers.treemutation import TreeMutationLikihoodRatio
-from imodels.experimental.bartpy.sigma import Sigma
-from imodels.experimental.bartpy.tree import Tree
+from ...model import Model
+from ...mutation import TreeMutation, GrowMutation, PruneMutation
+from ...node import LeafNode, TreeNode
+from ...samplers.treemutation import TreeMutationLikihoodRatio
+from ...sigma import Sigma
+from ...tree import Tree
 
 
 def log_grow_ratio(combined_node: LeafNode, left_node: LeafNode, right_node: LeafNode, sigma: Sigma, sigma_mu: float):
+    # deviation: https: // www.cs.ubc.ca / ~murphyk / Papers / bayesGauss.pdf
     var = np.power(sigma.current_value(), 2)
     var_mu = np.power(sigma_mu, 2)
     n = combined_node.data.X.n_obsv
     n_l = left_node.data.X.n_obsv
     n_r = right_node.data.X.n_obsv
 
-    first_term = (var * (var + n * sigma_mu)) / ((var + n_l * var_mu) * (var + n_r * var_mu))
-    first_term = np.log(np.sqrt(first_term))
+    # first_term = (var * (var + n * sigma_mu)) / ((var + n_l * var_mu) * (var + n_r * var_mu))
+    # first_term = np.log(np.sqrt(first_term))
 
     combined_y_sum = combined_node.data.y.summed_y()
     left_y_sum = left_node.data.y.summed_y()
@@ -56,15 +52,27 @@ def log_grow_ratio(combined_node: LeafNode, left_node: LeafNode, right_node: Lea
     right_resp_contribution = np.square(right_y_sum) / (var + n_r * sigma_mu)
     combined_resp_contribution = np.square(combined_y_sum) / (var + n * sigma_mu)
 
-    resp_contribution = left_resp_contribution + right_resp_contribution - combined_resp_contribution
+    # resp_contribution = left_resp_contribution + right_resp_contribution - combined_resp_contribution
 
-    return first_term + ((var_mu / (2 * var)) * resp_contribution)
+    numerator_first = np.log(np.sqrt(((var + n_l * var_mu) * (var + n_r * var_mu))))
+    numerator_second = (var_mu / (2 * var)) * (left_resp_contribution + right_resp_contribution)
+
+    big_model_l = numerator_first + numerator_second
+
+    denumerator_first = np.log(np.sqrt((var * (var + n * var_mu))))
+    denumerator_second = (var_mu / (2 * var)) * combined_resp_contribution
+
+    small_model_l = denumerator_first + denumerator_second
+
+    return big_model_l, small_model_l
+
+    # return first_term + ((var_mu / (2 * var)) * resp_contribution)
 
 
 class UniformTreeMutationLikihoodRatio(TreeMutationLikihoodRatio):
 
     def __init__(self,
-                 prob_method: List[float]=None):
+                 prob_method: List[float] = None):
         if prob_method is None:
             prob_method = [0.5, 0.5]
         self.prob_method = prob_method
@@ -99,11 +107,15 @@ class UniformTreeMutationLikihoodRatio(TreeMutationLikihoodRatio):
 
     @staticmethod
     def log_likihood_ratio_grow(model: Model, proposal: TreeMutation):
-        return log_grow_ratio(proposal.existing_node, proposal.updated_node.left_child, proposal.updated_node.right_child, model.sigma, model.sigma_m)
+        new_model_l, old_model_l = log_grow_ratio(proposal.existing_node, proposal.updated_node.left_child,
+                                                  proposal.updated_node.right_child, model.sigma, model.sigma_m)
+        return (new_model_l - old_model_l), (new_model_l, old_model_l)
 
     @staticmethod
     def log_likihood_ratio_prune(model: Model, proposal: TreeMutation):
-        return - log_grow_ratio(proposal.updated_node, proposal.existing_node.left_child, proposal.existing_node.right_child, model.sigma, model.sigma_m)
+        old_model_l, new_model_l = log_grow_ratio(proposal.updated_node, proposal.existing_node.left_child,
+                                                  proposal.existing_node.right_child, model.sigma, model.sigma_m)
+        return (new_model_l - old_model_l), (new_model_l, old_model_l)
 
     def log_grow_transition_ratio(self, tree: Tree, mutation: GrowMutation):
         prob_prune_selected = - np.log(n_prunable_decision_nodes(tree) + 1)
@@ -112,11 +124,15 @@ class UniformTreeMutationLikihoodRatio(TreeMutationLikihoodRatio):
         prob_selection_ratio = prob_prune_selected - prob_grow_selected
         prune_grow_ratio = np.log(self.prob_method[1] / self.prob_method[0])
 
-        return prune_grow_ratio + prob_selection_ratio
+        numerator = prob_prune_selected
+        denominator = prob_grow_selected
+
+        # return prune_grow_ratio + prob_selection_ratio
+        return numerator - denominator, (numerator, denominator)
 
     def log_prune_transition_ratio(self, tree: Tree, mutation: PruneMutation):
         if n_splittable_leaf_nodes(tree) == 1:
-            prob_grow_node_selected = - np.inf  # Infinitely unlikely to be able to grow a null tree
+            prob_grow_node_selected = - np.inf  # Infinitely unlikely to be able to prune a null tree
         else:
             prob_grow_node_selected = - np.log(n_splittable_leaf_nodes(tree) - 1)
         prob_split = log_probability_split_within_node(GrowMutation(mutation.updated_node, mutation.existing_node))
@@ -127,7 +143,12 @@ class UniformTreeMutationLikihoodRatio(TreeMutationLikihoodRatio):
         prob_selection_ratio = prob_grow_selected - prob_prune_selected
         grow_prune_ratio = np.log(self.prob_method[0] / self.prob_method[1])
 
-        return grow_prune_ratio + prob_selection_ratio
+        numerator = prob_grow_selected
+        denominator = prob_prune_selected
+
+        # return grow_prune_ratio + prob_selection_ratio
+
+        return numerator - denominator, (numerator, denominator)
 
     @staticmethod
     def log_tree_ratio_grow(model: Model, tree: Tree, proposal: GrowMutation):
@@ -139,7 +160,7 @@ class UniformTreeMutationLikihoodRatio(TreeMutationLikihoodRatio):
         prob_chosen_split = log_probability_split_within_tree(tree, proposal)
         numerator = prob_left_not_split + prob_right_not_split + prob_updated_node_split + prob_chosen_split
 
-        return numerator - denominator
+        return numerator - denominator, (numerator, denominator)
 
     @staticmethod
     def log_tree_ratio_prune(model: Model, proposal: PruneMutation):
@@ -148,10 +169,11 @@ class UniformTreeMutationLikihoodRatio(TreeMutationLikihoodRatio):
         prob_left_not_split = log_probability_node_not_split(model, proposal.existing_node.left_child)
         prob_right_not_split = log_probability_node_not_split(model, proposal.existing_node.left_child)
         prob_updated_node_split = log_probability_node_split(model, proposal.existing_node)
-        prob_chosen_split = log_probability_split_within_node(GrowMutation(proposal.updated_node, proposal.existing_node))
+        prob_chosen_split = log_probability_split_within_node(
+            GrowMutation(proposal.updated_node, proposal.existing_node))
         denominator = prob_left_not_split + prob_right_not_split + prob_updated_node_split + prob_chosen_split
 
-        return numerator - denominator
+        return numerator - denominator, (numerator, denominator)
 
 
 def n_prunable_decision_nodes(tree: Tree) -&gt; int:
@@ -193,7 +215,8 @@ def log_probability_split_within_node(mutation: GrowMutation) -&gt; float:
     prob_splitting_variable_selected = - np.log(mutation.existing_node.data.X.n_splittable_variables)
     splitting_variable = mutation.updated_node.most_recent_split_condition().splitting_variable
     splitting_value = mutation.updated_node.most_recent_split_condition().splitting_value
-    prob_value_selected_within_variable = np.log(mutation.existing_node.data.X.proportion_of_value_in_variable(splitting_variable, splitting_value))
+    prob_value_selected_within_variable = np.log(
+        mutation.existing_node.data.X.proportion_of_value_in_variable(splitting_variable, splitting_value))
     return prob_splitting_variable_selected + prob_value_selected_within_variable
 
 
@@ -222,14 +245,15 @@ def log_probability_node_not_split(model: Model, node: TreeNode):
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def log_grow_ratio(combined_node: LeafNode, left_node: LeafNode, right_node: LeafNode, sigma: Sigma, sigma_mu: float):
+    # deviation: https: // www.cs.ubc.ca / ~murphyk / Papers / bayesGauss.pdf
     var = np.power(sigma.current_value(), 2)
     var_mu = np.power(sigma_mu, 2)
     n = combined_node.data.X.n_obsv
     n_l = left_node.data.X.n_obsv
     n_r = right_node.data.X.n_obsv
 
-    first_term = (var * (var + n * sigma_mu)) / ((var + n_l * var_mu) * (var + n_r * var_mu))
-    first_term = np.log(np.sqrt(first_term))
+    # first_term = (var * (var + n * sigma_mu)) / ((var + n_l * var_mu) * (var + n_r * var_mu))
+    # first_term = np.log(np.sqrt(first_term))
 
     combined_y_sum = combined_node.data.y.summed_y()
     left_y_sum = left_node.data.y.summed_y()
@@ -239,9 +263,21 @@ def log_probability_node_not_split(model: Model, node: TreeNode):
     right_resp_contribution = np.square(right_y_sum) / (var + n_r * sigma_mu)
     combined_resp_contribution = np.square(combined_y_sum) / (var + n * sigma_mu)
 
-    resp_contribution = left_resp_contribution + right_resp_contribution - combined_resp_contribution
+    # resp_contribution = left_resp_contribution + right_resp_contribution - combined_resp_contribution
 
-    return first_term + ((var_mu / (2 * var)) * resp_contribution)</code></pre>
+    numerator_first = np.log(np.sqrt(((var + n_l * var_mu) * (var + n_r * var_mu))))
+    numerator_second = (var_mu / (2 * var)) * (left_resp_contribution + right_resp_contribution)
+
+    big_model_l = numerator_first + numerator_second
+
+    denumerator_first = np.log(np.sqrt((var * (var + n * var_mu))))
+    denumerator_second = (var_mu / (2 * var)) * combined_resp_contribution
+
+    small_model_l = denumerator_first + denumerator_second
+
+    return big_model_l, small_model_l
+
+    # return first_term + ((var_mu / (2 * var)) * resp_contribution)</code></pre>
 </details>
 </dd>
 <dt id="imodels.experimental.bartpy.samplers.unconstrainedtree.likihoodratio.log_probability_node_not_split"><code class="name flex">
@@ -292,7 +328,8 @@ log(P(splitting_value | splitting_variable, node, grow) * P(splitting_variable |
     prob_splitting_variable_selected = - np.log(mutation.existing_node.data.X.n_splittable_variables)
     splitting_variable = mutation.updated_node.most_recent_split_condition().splitting_variable
     splitting_value = mutation.updated_node.most_recent_split_condition().splitting_value
-    prob_value_selected_within_variable = np.log(mutation.existing_node.data.X.proportion_of_value_in_variable(splitting_variable, splitting_value))
+    prob_value_selected_within_variable = np.log(
+        mutation.existing_node.data.X.proportion_of_value_in_variable(splitting_variable, splitting_value))
     return prob_splitting_variable_selected + prob_value_selected_within_variable</code></pre>
 </details>
 </dd>
@@ -373,7 +410,7 @@ i.e. how many leaf nodes have more than one distinct values in their covariate m
 <pre><code class="python">class UniformTreeMutationLikihoodRatio(TreeMutationLikihoodRatio):
 
     def __init__(self,
-                 prob_method: List[float]=None):
+                 prob_method: List[float] = None):
         if prob_method is None:
             prob_method = [0.5, 0.5]
         self.prob_method = prob_method
@@ -408,11 +445,15 @@ i.e. how many leaf nodes have more than one distinct values in their covariate m
 
     @staticmethod
     def log_likihood_ratio_grow(model: Model, proposal: TreeMutation):
-        return log_grow_ratio(proposal.existing_node, proposal.updated_node.left_child, proposal.updated_node.right_child, model.sigma, model.sigma_m)
+        new_model_l, old_model_l = log_grow_ratio(proposal.existing_node, proposal.updated_node.left_child,
+                                                  proposal.updated_node.right_child, model.sigma, model.sigma_m)
+        return (new_model_l - old_model_l), (new_model_l, old_model_l)
 
     @staticmethod
     def log_likihood_ratio_prune(model: Model, proposal: TreeMutation):
-        return - log_grow_ratio(proposal.updated_node, proposal.existing_node.left_child, proposal.existing_node.right_child, model.sigma, model.sigma_m)
+        old_model_l, new_model_l = log_grow_ratio(proposal.updated_node, proposal.existing_node.left_child,
+                                                  proposal.existing_node.right_child, model.sigma, model.sigma_m)
+        return (new_model_l - old_model_l), (new_model_l, old_model_l)
 
     def log_grow_transition_ratio(self, tree: Tree, mutation: GrowMutation):
         prob_prune_selected = - np.log(n_prunable_decision_nodes(tree) + 1)
@@ -421,11 +462,15 @@ i.e. how many leaf nodes have more than one distinct values in their covariate m
         prob_selection_ratio = prob_prune_selected - prob_grow_selected
         prune_grow_ratio = np.log(self.prob_method[1] / self.prob_method[0])
 
-        return prune_grow_ratio + prob_selection_ratio
+        numerator = prob_prune_selected
+        denominator = prob_grow_selected
+
+        # return prune_grow_ratio + prob_selection_ratio
+        return numerator - denominator, (numerator, denominator)
 
     def log_prune_transition_ratio(self, tree: Tree, mutation: PruneMutation):
         if n_splittable_leaf_nodes(tree) == 1:
-            prob_grow_node_selected = - np.inf  # Infinitely unlikely to be able to grow a null tree
+            prob_grow_node_selected = - np.inf  # Infinitely unlikely to be able to prune a null tree
         else:
             prob_grow_node_selected = - np.log(n_splittable_leaf_nodes(tree) - 1)
         prob_split = log_probability_split_within_node(GrowMutation(mutation.updated_node, mutation.existing_node))
@@ -436,7 +481,12 @@ i.e. how many leaf nodes have more than one distinct values in their covariate m
         prob_selection_ratio = prob_grow_selected - prob_prune_selected
         grow_prune_ratio = np.log(self.prob_method[0] / self.prob_method[1])
 
-        return grow_prune_ratio + prob_selection_ratio
+        numerator = prob_grow_selected
+        denominator = prob_prune_selected
+
+        # return grow_prune_ratio + prob_selection_ratio
+
+        return numerator - denominator, (numerator, denominator)
 
     @staticmethod
     def log_tree_ratio_grow(model: Model, tree: Tree, proposal: GrowMutation):
@@ -448,7 +498,7 @@ i.e. how many leaf nodes have more than one distinct values in their covariate m
         prob_chosen_split = log_probability_split_within_tree(tree, proposal)
         numerator = prob_left_not_split + prob_right_not_split + prob_updated_node_split + prob_chosen_split
 
-        return numerator - denominator
+        return numerator - denominator, (numerator, denominator)
 
     @staticmethod
     def log_tree_ratio_prune(model: Model, proposal: PruneMutation):
@@ -457,10 +507,11 @@ i.e. how many leaf nodes have more than one distinct values in their covariate m
         prob_left_not_split = log_probability_node_not_split(model, proposal.existing_node.left_child)
         prob_right_not_split = log_probability_node_not_split(model, proposal.existing_node.left_child)
         prob_updated_node_split = log_probability_node_split(model, proposal.existing_node)
-        prob_chosen_split = log_probability_split_within_node(GrowMutation(proposal.updated_node, proposal.existing_node))
+        prob_chosen_split = log_probability_split_within_node(
+            GrowMutation(proposal.updated_node, proposal.existing_node))
         denominator = prob_left_not_split + prob_right_not_split + prob_updated_node_split + prob_chosen_split
 
-        return numerator - denominator</code></pre>
+        return numerator - denominator, (numerator, denominator)</code></pre>
 </details>
 <h3>Ancestors</h3>
 <ul class="hlist">
@@ -480,7 +531,9 @@ i.e. how many leaf nodes have more than one distinct values in their covariate m
 </summary>
 <pre><code class="python">@staticmethod
 def log_likihood_ratio_grow(model: Model, proposal: TreeMutation):
-    return log_grow_ratio(proposal.existing_node, proposal.updated_node.left_child, proposal.updated_node.right_child, model.sigma, model.sigma_m)</code></pre>
+    new_model_l, old_model_l = log_grow_ratio(proposal.existing_node, proposal.updated_node.left_child,
+                                              proposal.updated_node.right_child, model.sigma, model.sigma_m)
+    return (new_model_l - old_model_l), (new_model_l, old_model_l)</code></pre>
 </details>
 </dd>
 <dt id="imodels.experimental.bartpy.samplers.unconstrainedtree.likihoodratio.UniformTreeMutationLikihoodRatio.log_likihood_ratio_prune"><code class="name flex">
@@ -494,7 +547,9 @@ def log_likihood_ratio_grow(model: Model, proposal: TreeMutation):
 </summary>
 <pre><code class="python">@staticmethod
 def log_likihood_ratio_prune(model: Model, proposal: TreeMutation):
-    return - log_grow_ratio(proposal.updated_node, proposal.existing_node.left_child, proposal.existing_node.right_child, model.sigma, model.sigma_m)</code></pre>
+    old_model_l, new_model_l = log_grow_ratio(proposal.updated_node, proposal.existing_node.left_child,
+                                              proposal.existing_node.right_child, model.sigma, model.sigma_m)
+    return (new_model_l - old_model_l), (new_model_l, old_model_l)</code></pre>
 </details>
 </dd>
 <dt id="imodels.experimental.bartpy.samplers.unconstrainedtree.likihoodratio.UniformTreeMutationLikihoodRatio.log_tree_ratio_grow"><code class="name flex">
@@ -516,7 +571,7 @@ def log_tree_ratio_grow(model: Model, tree: Tree, proposal: GrowMutation):
     prob_chosen_split = log_probability_split_within_tree(tree, proposal)
     numerator = prob_left_not_split + prob_right_not_split + prob_updated_node_split + prob_chosen_split
 
-    return numerator - denominator</code></pre>
+    return numerator - denominator, (numerator, denominator)</code></pre>
 </details>
 </dd>
 <dt id="imodels.experimental.bartpy.samplers.unconstrainedtree.likihoodratio.UniformTreeMutationLikihoodRatio.log_tree_ratio_prune"><code class="name flex">
@@ -535,10 +590,11 @@ def log_tree_ratio_prune(model: Model, proposal: PruneMutation):
     prob_left_not_split = log_probability_node_not_split(model, proposal.existing_node.left_child)
     prob_right_not_split = log_probability_node_not_split(model, proposal.existing_node.left_child)
     prob_updated_node_split = log_probability_node_split(model, proposal.existing_node)
-    prob_chosen_split = log_probability_split_within_node(GrowMutation(proposal.updated_node, proposal.existing_node))
+    prob_chosen_split = log_probability_split_within_node(
+        GrowMutation(proposal.updated_node, proposal.existing_node))
     denominator = prob_left_not_split + prob_right_not_split + prob_updated_node_split + prob_chosen_split
 
-    return numerator - denominator</code></pre>
+    return numerator - denominator, (numerator, denominator)</code></pre>
 </details>
 </dd>
 </dl>
@@ -560,7 +616,11 @@ def log_tree_ratio_prune(model: Model, proposal: PruneMutation):
     prob_selection_ratio = prob_prune_selected - prob_grow_selected
     prune_grow_ratio = np.log(self.prob_method[1] / self.prob_method[0])
 
-    return prune_grow_ratio + prob_selection_ratio</code></pre>
+    numerator = prob_prune_selected
+    denominator = prob_grow_selected
+
+    # return prune_grow_ratio + prob_selection_ratio
+    return numerator - denominator, (numerator, denominator)</code></pre>
 </details>
 </dd>
 <dt id="imodels.experimental.bartpy.samplers.unconstrainedtree.likihoodratio.UniformTreeMutationLikihoodRatio.log_prune_transition_ratio"><code class="name flex">
@@ -574,7 +634,7 @@ def log_tree_ratio_prune(model: Model, proposal: PruneMutation):
 </summary>
 <pre><code class="python">def log_prune_transition_ratio(self, tree: Tree, mutation: PruneMutation):
     if n_splittable_leaf_nodes(tree) == 1:
-        prob_grow_node_selected = - np.inf  # Infinitely unlikely to be able to grow a null tree
+        prob_grow_node_selected = - np.inf  # Infinitely unlikely to be able to prune a null tree
     else:
         prob_grow_node_selected = - np.log(n_splittable_leaf_nodes(tree) - 1)
     prob_split = log_probability_split_within_node(GrowMutation(mutation.updated_node, mutation.existing_node))
@@ -585,7 +645,12 @@ def log_tree_ratio_prune(model: Model, proposal: PruneMutation):
     prob_selection_ratio = prob_grow_selected - prob_prune_selected
     grow_prune_ratio = np.log(self.prob_method[0] / self.prob_method[1])
 
-    return grow_prune_ratio + prob_selection_ratio</code></pre>
+    numerator = prob_grow_selected
+    denominator = prob_prune_selected
+
+    # return grow_prune_ratio + prob_selection_ratio
+
+    return numerator - denominator, (numerator, denominator)</code></pre>
 </details>
 </dd>
 </dl>
@@ -605,7 +670,7 @@ def log_tree_ratio_prune(model: Model, proposal: PruneMutation):
 </section>
 </article>
 <nav id="sidebar">
-<h1>Index</h1>
+<h1>Index 🔍</h1>
 <div class="toc">
 <ul></ul>
 </div>
@@ -642,10 +707,15 @@ def log_tree_ratio_prune(model: Model, proposal: PruneMutation):
 </ul>
 </li>
 </ul>
+<p><img align="center" width=100% src="https://csinva.io/imodels/img/anim.gif"> </img></p>
+<!-- add wave animation -->
 </nav>
 </main>
 <footer id="footer">
-<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.10.0</a>.</p>
 </footer>
 </body>
 </html>
+<!-- add github corner -->
+<a href="https://github.com/csinva/imodels" class="github-corner" aria-label="View source on GitHub"><svg width="120" height="120" viewBox="0 0 250 250" style="fill:#70B7FD; color:#fff; position: absolute; top: 0; border: 0; right: 0;" aria-hidden="true"><path d="M0,0 L115,115 L130,115 L142,142 L250,250 L250,0 Z"></path><path d="m128.3,109.0 c113.8,99.7 119.0,89.6 119.0,89.6 c122.0,82.7 120.5,78.6 120.5,78.6 c119.2,72.0 123.4,76.3 123.4,76.3 c127.3,80.9 125.5,87.3 125.5,87.3 c122.9,97.6 130.6,101.9 134.4,103.2" fill="currentcolor" style="transform-origin: 130px 106px;" class="octo-arm"></path><path d="M115.0,115.0 C114.9,115.1 118.7,116.5 119.8,115.4 L133.7,101.6 C136.9,99.2 139.9,98.4 142.2,98.6 C133.8,88.0 127.5,74.4 143.8,58.0 C148.5,53.4 154.0,51.2 159.7,51.0 C160.3,49.4 163.2,43.6 171.4,40.1 C171.4,40.1 176.1,42.5 178.8,56.2 C183.1,58.6 187.2,61.8 190.9,65.4 C194.5,69.0 197.7,73.2 200.1,77.6 C213.8,80.2 216.3,84.9 216.3,84.9 C212.7,93.1 206.9,96.0 205.4,96.6 C205.1,102.4 203.0,107.8 198.3,112.5 C181.9,128.9 168.3,122.5 157.7,114.1 C157.9,116.9 156.7,120.9 152.7,124.9 L141.0,136.5 C139.8,137.7 141.6,141.9 141.8,141.8 Z" fill="currentColor" class="octo-body"></path></svg></a><style>.github-corner:hover .octo-arm{animation:octocat-wave 560ms ease-in-out}@keyframes octocat-wave{0%,100%{transform:rotate(0)}20%,60%{transform:rotate(-25deg)}40%,80%{transform:rotate(10deg)}}@media (max-width:500px){.github-corner:hover .octo-arm{animation:none}.github-corner .octo-arm{animation:octocat-wave 560ms ease-in-out}}</style>
+<!-- add wave animation stylesheet -->
+<link rel="stylesheet" href="github.css">

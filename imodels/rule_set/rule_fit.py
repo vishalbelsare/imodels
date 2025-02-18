@@ -11,6 +11,7 @@ from typing import List, Tuple
 
 import numpy as np
 import pandas as pd
+import scipy
 from scipy.special import softmax
 from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.base import TransformerMixin
@@ -18,6 +19,7 @@ from sklearn.utils.multiclass import unique_labels
 from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 
 from imodels.rule_set.rule_set import RuleSet
+from imodels.util.arguments import check_fit_arguments
 from imodels.util.extract import extract_rulefit
 from imodels.util.rule import get_feature_dict, replace_feature_name, Rule
 from imodels.util.score import score_linear
@@ -99,27 +101,14 @@ class RuleFit(BaseEstimator, TransformerMixin, RuleSet):
         self.stddev = None
         self.mean = None
 
-        self._init_prediction_task()  # decides between regressor and classifier
-
-    def _init_prediction_task(self):
-        """
-        RuleFitRegressor and RuleFitClassifier override this method
-        to alter the prediction task. When using this class directly,
-        it is equivalent to RuleFitRegressor
-        """
-        self.prediction_task = 'regression'
-
     def fit(self, X, y=None, feature_names=None):
         """Fit and estimate linear combination of rule ensemble
 
         """
-        if feature_names is None and isinstance(X, pd.DataFrame):
-            feature_names = X.columns
-
-        X, y = check_X_y(X, y)
-        if self.prediction_task == 'classification':
-            self.classes_ = unique_labels(y)
-        self.n_features_in_ = X.shape[1]
+        X, y, feature_names = check_fit_arguments(self, X, y, feature_names)
+        if isinstance(self, ClassifierMixin) and len(np.unique(y)) > 2:
+            raise ValueError(
+                "RuleFit does not yet support multiclass classification")
 
         self.n_features_ = X.shape[1]
         self.feature_dict_ = get_feature_dict(X.shape[1], feature_names)
@@ -127,7 +116,8 @@ class RuleFit(BaseEstimator, TransformerMixin, RuleSet):
         self.feature_names = np.array(list(self.feature_dict_.values()))
 
         extracted_rules = self._extract_rules(X, y)
-        self.rules_without_feature_names_, self.coef, self.intercept = self._score_rules(X, y, extracted_rules)
+        self.rules_without_feature_names_, self.coef, self.intercept = self._score_rules(
+            X, y, extracted_rules)
         self.rules_ = [
             replace_feature_name(rule, self.feature_dict_) for rule in self.rules_without_feature_names_
         ]
@@ -140,14 +130,14 @@ class RuleFit(BaseEstimator, TransformerMixin, RuleSet):
 
         return self
 
-    def predict_continuous_output(self, X):
+    def _predict_continuous_output(self, X):
         """Predict outcome of linear model for X
         """
         if type(X) == pd.DataFrame:
             X = X.values.astype(np.float32)
 
         y_pred = np.zeros(X.shape[0])
-        y_pred += self.eval_weighted_rule_sum(X)
+        y_pred += self._eval_weighted_rule_sum(X)
 
         if self.include_linear:
             if self.lin_standardise:
@@ -160,17 +150,23 @@ class RuleFit(BaseEstimator, TransformerMixin, RuleSet):
         For classification, returns discrete output.
         '''
         check_is_fitted(self)
+        if scipy.sparse.issparse(X):
+            X = X.toarray()
         X = check_array(X)
-        if self.prediction_task == 'regression':
-            return self.predict_continuous_output(X)
+        if isinstance(self, RegressorMixin):
+            return self._predict_continuous_output(X)
         else:
-            return np.argmax(self.predict_proba(X), axis=1)
+            class_preds = np.argmax(self.predict_proba(X), axis=1)
+            return np.array([self.classes_[i] for i in class_preds])
 
     def predict_proba(self, X):
         check_is_fitted(self)
+        if scipy.sparse.issparse(X):
+            X = X.toarray()
         X = check_array(X)
-        continuous_output = self.predict_continuous_output(X)
-        logits = np.vstack((1 - continuous_output, continuous_output)).transpose()
+        continuous_output = self._predict_continuous_output(X)
+        logits = np.vstack(
+            (1 - continuous_output, continuous_output)).transpose()
         return softmax(logits, axis=1)
 
     def transform(self, X=None, rules=None):
@@ -188,13 +184,21 @@ class RuleFit(BaseEstimator, TransformerMixin, RuleSet):
             Transformed data set
         """
         df = pd.DataFrame(X, columns=self.feature_placeholders)
+        # print('df', df.dtypes, df.head())
         X_transformed = np.zeros((X.shape[0], len(rules)))
+
         for i, r in enumerate(rules):
-            features_r_uses = [term.split(' ')[0] for term in r.split(' and ')]
+            features_r_uses = list(
+                set(term.split(' ')[0] for term in r.split(' and ')))
+            # print('r', r)
+            # print('feats', df[features_r_uses])
+            # print('ans', df[features_r_uses].query(r))
+            # print(
+            #     'tra', X_transformed[df[features_r_uses].query(r).index.values, i])
             X_transformed[df[features_r_uses].query(r).index.values, i] = 1
         return X_transformed
 
-    def get_rules(self, exclude_zero_coef=False, subregion=None):
+    def _get_rules(self, exclude_zero_coef=False, subregion=None):
         """Return the estimated rules
 
         Parameters
@@ -226,7 +230,8 @@ class RuleFit(BaseEstimator, TransformerMixin, RuleSet):
                 subregion = np.array(subregion)
                 importance = sum(abs(coef) * abs([x[i] for x in self.winsorizer.trim(subregion)] - self.mean[i])) / len(
                     subregion)
-            output_rules += [(self.feature_names[i], 'linear', coef, 1, importance)]
+            output_rules += [(self.feature_names[i],
+                              'linear', coef, 1, importance)]
 
         # Add rules
         for i in range(0, len(self.rules_)):
@@ -234,27 +239,43 @@ class RuleFit(BaseEstimator, TransformerMixin, RuleSet):
             coef = self.coef[i + n_features]
 
             if subregion is None:
-                importance = abs(coef) * (rule.support * (1 - rule.support)) ** (1 / 2)
+                importance = abs(coef) * (rule.support *
+                                          (1 - rule.support)) ** (1 / 2)
             else:
                 rkx = self.transform(subregion, [rule])[:, -1]
-                importance = sum(abs(coef) * abs(rkx - rule.support)) / len(subregion)
+                importance = sum(
+                    abs(coef) * abs(rkx - rule.support)) / len(subregion)
 
-            output_rules += [(self.rules_[i].rule, 'rule', coef, rule.support, importance)]
-        rules = pd.DataFrame(output_rules, columns=["rule", "type", "coef", "support", "importance"])
+            output_rules += [(self.rules_[i].rule, 'rule',
+                              coef, rule.support, importance)]
+        rules = pd.DataFrame(output_rules, columns=[
+                             "rule", "type", "coef", "support", "importance"])
         if exclude_zero_coef:
             rules = rules.ix[rules.coef != 0]
         return rules
 
     def visualize(self, decimals=2):
-        rules = self.get_rules()
+        rules = self._get_rules()
         rules = rules[rules.coef != 0].sort_values("support", ascending=False)
         pd.set_option('display.max_colwidth', None)
         return rules[['rule', 'coef']].round(decimals)
 
     def __str__(self):
-        return 'RuleFit:\n' + self.visualize().to_string(index=False) + '\n'
+        if not hasattr(self, 'coef'):
+            s = self.__class__.__name__
+            s += "("
+            s += "max_rules="
+            s += repr(self.max_rules)
+            s += ")"
+            return s
+        else:
+            s = '> ------------------------------\n'
+            s += '> RuleFit:\n'
+            s += '> \tPredictions are made by summing the coefficients of each rule\n'
+            s += '> ------------------------------\n'
+            return s + self.visualize().to_string(index=False) + '\n'
 
-    def _extract_rules(self, X, y) -> List[Rule]:
+    def _extract_rules(self, X, y) -> List[str]:
         return extract_rulefit(X, y,
                                feature_names=self.feature_placeholders,
                                n_estimators=self.n_estimators,
@@ -290,9 +311,10 @@ class RuleFit(BaseEstimator, TransformerMixin, RuleSet):
         # no rules fit and self.include_linear == False
         if X_concat.shape[1] == 0:
             return [], [], 0
-
+        prediction_task = 'regression' if isinstance(
+            self, RegressorMixin) else 'classification'
         return score_linear(X_concat, y, rules,
-                            prediction_task=self.prediction_task,
+                            prediction_task=prediction_task,
                             max_rules=self.max_rules,
                             alpha=self.alpha,
                             cv=self.cv,
@@ -300,10 +322,8 @@ class RuleFit(BaseEstimator, TransformerMixin, RuleSet):
 
 
 class RuleFitRegressor(RuleFit, RegressorMixin):
-    def _init_prediction_task(self):
-        self.prediction_task = 'regression'
+    ...
 
 
 class RuleFitClassifier(RuleFit, ClassifierMixin):
-    def _init_prediction_task(self):
-        self.prediction_task = 'classification'
+    ...

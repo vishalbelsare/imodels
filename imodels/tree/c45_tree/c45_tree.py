@@ -15,6 +15,7 @@ import pandas as pd
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.model_selection import cross_val_score
 from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
+from imodels.util.arguments import check_fit_arguments
 
 from ..c45_tree.c45_utils import decision, is_numeric_feature, gain, gain_ratio, get_best_split, \
     set_as_leaf_node
@@ -138,7 +139,8 @@ class C45TreeClassifier(BaseEstimator, ClassifierMixin):
 
     def fit(self, X, y, feature_names: str = None):
         self.complexity_ = 0
-        X, y = check_X_y(X, y)
+        # X, y = check_X_y(X, y)
+        X, y, feature_names = check_fit_arguments(self, X, y, feature_names)
         self.resultType = type(y[0])
         if feature_names is None:
             self.feature_names = [f'X_{x}' for x in range(X.shape[1])]
@@ -146,9 +148,11 @@ class C45TreeClassifier(BaseEstimator, ClassifierMixin):
             # only include alphanumeric chars / replace spaces with underscores
             self.feature_names = [''.join([i for i in x if i.isalnum()]).replace(' ', '_')
                                   for x in feature_names]
-            self.feature_names = ['X_' + x if x[0].isdigit()
-                                  else x
-                                  for x in self.feature_names]
+            self.feature_names = [
+                'X_' + x if x[0].isdigit()
+                else x
+                for x in self.feature_names
+            ]
 
         assert len(self.feature_names) == X.shape[1]
 
@@ -215,7 +219,7 @@ class C45TreeClassifier(BaseEstimator, ClassifierMixin):
             answerlist = sorted(answerlist.items(), key=lambda x: x[1], reverse=True)
             answer = answerlist[0][0]
             # prediction.append(self.resultType(answer))
-            prediction.append(np.float(answer))
+            prediction.append(float(answer))
 
         return np.array(prediction)
 
@@ -372,6 +376,8 @@ class HSC45TreeClassifier(BaseEstimator):
     def fit(self, *args, **kwargs):
         X = kwargs['X'] if "X" in kwargs else args[0]
         y = kwargs['y'] if "y" in kwargs else args[1]
+        if not hasattr(self.estimator_, "dom_"):
+            self.estimator_.fit(X, y)
         self.impute_nodes(X, y)
         self.shrink_tree()
 
@@ -402,6 +408,7 @@ class HSC45TreeClassifierCV(HSC45TreeClassifier):
 
     def fit(self, X, y, *args, **kwargs):
         self.scores_ = []
+
         for reg_param in self.reg_param_list:
             est = HSC45TreeClassifier(copy.deepcopy(self.estimator_), reg_param)
             cv_scores = cross_val_score(est, X, y, cv=self.cv, scoring=self.scoring)

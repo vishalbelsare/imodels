@@ -1,14 +1,16 @@
-from typing import Optional
+from typing import Optional, Tuple
 
-from imodels.experimental.bartpy.model import Model
-from imodels.experimental.bartpy.mutation import TreeMutation
-from imodels.experimental.bartpy.samplers.sampler import Sampler
-from imodels.experimental.bartpy.samplers.scalar import UniformScalarSampler
-from imodels.experimental.bartpy.samplers.treemutation import TreeMutationLikihoodRatio
-from imodels.experimental.bartpy.samplers.treemutation import TreeMutationProposer
-from imodels.experimental.bartpy.samplers.unconstrainedtree.likihoodratio import UniformTreeMutationLikihoodRatio
-from imodels.experimental.bartpy.samplers.unconstrainedtree.proposer import UniformMutationProposer
-from imodels.experimental.bartpy.tree import Tree, mutate
+import numpy as np
+
+from ...model import Model
+from ...mutation import TreeMutation
+from ...samplers.sampler import Sampler
+from ...samplers.scalar import UniformScalarSampler
+from ...samplers.treemutation import TreeMutationLikelihoodRatio
+from ...samplers.treemutation import TreeMutationProposer
+from ...samplers.unconstrainedtree.likelihoodratio import UniformTreeMutationLikelihoodRatio
+from ...samplers.unconstrainedtree.proposer import UniformMutationProposer
+from ...tree import Tree, mutate
 
 
 class UnconstrainedTreeMutationSampler(Sampler):
@@ -16,42 +18,42 @@ class UnconstrainedTreeMutationSampler(Sampler):
     A sampler for tree mutation space.
     Responsible for producing samples of ways to mutate a tree within a model
 
-    Works by combining a proposer and likihood evaluator into:
+    Works by combining a proposer and likelihood evaluator into:
      - propose a mutation
-     - assess likihood
-     - accept if likihood higher than a uniform(0, 1) draw
+     - assess likelihood
+     - accept if likelihood higher than a uniform(0, 1) draw
 
     Parameters
     ----------
     proposer: TreeMutationProposer
-    likihood_ratio: TreeMutationLikihoodRatio
+    likelihood_ratio: TreeMutationLikelihoodRatio
     """
 
     def __init__(self,
                  proposer: TreeMutationProposer,
-                 likihood_ratio: TreeMutationLikihoodRatio,
+                 likelihood_ratio: TreeMutationLikelihoodRatio,
                  scalar_sampler=UniformScalarSampler()):
         self.proposer = proposer
-        self.likihood_ratio = likihood_ratio
+        self.likelihood_ratio = likelihood_ratio
         self._scalar_sampler = scalar_sampler
 
-    def sample(self, model: Model, tree: Tree) -> Optional[TreeMutation]:
+    def sample(self, model: Model, tree: Tree) -> (Optional[TreeMutation], float):
         proposal = self.proposer.propose(tree)
-        ratio = self.likihood_ratio.log_probability_ratio(model, tree, proposal)
+        ratio, (l_new, l_old), (prob_new, prob_old) = self.likelihood_ratio.log_probability_ratio(model, tree, proposal)
         if self._scalar_sampler.sample() < ratio:
-            return proposal
+            return proposal, np.exp(l_new) - np.exp(l_old), np.exp(prob_new) - np.exp(prob_old)
         else:
-            return None
+            return None, 0, 0
 
-    def step(self, model: Model, tree: Tree) -> Optional[TreeMutation]:
-        mutation = self.sample(model, tree)
+    def step(self, model: Model, tree: Tree) -> Tuple[Optional[TreeMutation], float]:
+        mutation, likelihood, prob = self.sample(model, tree)
         if mutation is not None:
             mutate(tree, mutation)
-        return mutation
+        return mutation, likelihood, prob
 
 
 def get_tree_sampler(p_grow: float,
                      p_prune: float) -> Sampler:
     proposer = UniformMutationProposer([p_grow, p_prune])
-    likihood = UniformTreeMutationLikihoodRatio([p_grow, p_prune])
-    return UnconstrainedTreeMutationSampler(proposer, likihood)
+    likelihood = UniformTreeMutationLikelihoodRatio([p_grow, p_prune])
+    return UnconstrainedTreeMutationSampler(proposer, likelihood)

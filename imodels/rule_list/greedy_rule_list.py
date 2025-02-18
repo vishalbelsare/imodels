@@ -1,19 +1,24 @@
-'''Greedy rule list. Greedily splits on one feature at a time along a single path.
+'''Greedy rule list.
+Greedily splits on one feature at a time along a single path.
+Tries to find rules which maximize the probability of class 1.
+Currently only supports binary classification.
 '''
 
 import math
-import numpy as np
 from copy import deepcopy
 
+import numpy as np
 from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.utils.multiclass import check_classification_targets, unique_labels
-from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
-
+from sklearn.utils.multiclass import unique_labels
+from sklearn.utils.validation import check_array, check_is_fitted
+from sklearn.tree import DecisionTreeClassifier
 from imodels.rule_list.rule_list import RuleList
+from imodels.util.arguments import check_fit_arguments
 
 
 class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
-    def __init__(self, max_depth: int = 5, class_weight=None, criterion: str = 'gini', strategy: str = 'max'):
+    def __init__(self, max_depth: int = 5, class_weight=None,
+                 criterion: str = 'gini'):
         '''
         Params
         ------
@@ -21,72 +26,68 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
             Maximum depth the list can achieve
         criterion: str
             Criterion used to split
-            'gini', 'entropy', or 'neg_corr'
-        strategy: str
-            How to select which side of split becomes leaf node
-            Currently only supports 'max' - (higher risk side of split becomes leaf node)
+            'gini', 'entropy', or 'log_loss'
         '''
 
         self.max_depth = max_depth
         self.class_weight = class_weight
         self.criterion = criterion
-        self.strategy = strategy
         self.depth = 0  # tracks the fitted depth
 
-    def fit(self, x, y, depth: int = 0, feature_names=None, verbose=False):
+    def fit(self, X, y, depth: int = 0, feature_names=None, verbose=False):
         """
         Params
         ------
-        x: array_like
+        X: array_like
             Feature set
         y: array_like
             target variable
         depth
             the depth of the current layer (used to recurse)
         """
+        X, y, feature_names = check_fit_arguments(self, X, y, feature_names)
+        return self.fit_node_recursive(X, y, depth=0, verbose=verbose)
 
-        # set self.feature_names and make sure x, y are not pandas type
-        if 'pandas' in str(type(x)):
-            x = x.values
-        else:
-            if feature_names is None:
-                self.feature_names_ = ['feat ' + str(i) for i in range(x.shape[1])]
-        if feature_names is not None:
-            self.feature_names_ = feature_names
+    def fit_node_recursive(self, X, y, depth: int, verbose):
 
         # base case 1: no data in this group
-        if len(y) == 0:
+        if y.size == 0:
             return []
 
         # base case 2: all y is the same in this group
-        elif self.all_same(y):
+        elif np.all(y == y[0]):
             return [{'val': y[0], 'num_pts': y.size}]
 
-        # base case 3: max depth reached 
-        elif depth >= self.max_depth:
-            return []
+         # base case 3: max depth reached
+        elif depth == self.max_depth:
+            return [{'val': np.mean(y), 'num_pts': y.size}]
 
-        # recursively generate rule list 
+        # recursively generate rule list
         else:
 
             # find a split with the best value for the criterion
-            col, cutoff, criterion_val = self.find_best_split(x, y)
+            m = DecisionTreeClassifier(max_depth=1, criterion=self.criterion)
+            m.fit(X, y)
+            col = m.tree_.feature[0]
+            cutoff = m.tree_.threshold[0]
+            # col, cutoff, criterion_val = self._find_best_split(X, y)
+            if col == -2:
+                return []
+                
+            y_left = y[X[:, col] < cutoff]  # left-hand side data
+            y_right = y[X[:, col] >= cutoff]  # right-hand side data
+
 
             # put higher probability of class 1 on the right-hand side
-            if self.strategy == 'max':
-                y_left = y[x[:, col] < cutoff]  # left-hand side data
-                y_right = y[x[:, col] >= cutoff]  # right-hand side data
-                if len(y_left) > 0 and np.mean(y_left) > np.mean(y_right):
-                    flip = True
-                    tmp = deepcopy(y_left)
-                    y_left = deepcopy(y_right)
-                    y_right = tmp
-                    x_left = x[x[:, col] >= cutoff]
-                else:
-                    flip = False
-                    x_left = x[x[:, col] < cutoff]
+            if len(y_left) > 0 and np.mean(y_left) > np.mean(y_right):
+                flip = True
+                tmp = deepcopy(y_left)
+                y_left = deepcopy(y_right)
+                y_right = tmp
+                x_left = X[X[:, col] >= cutoff]
             else:
-                print('strategy must be max!')
+                flip = False
+                x_left = X[X[:, col] < cutoff]
 
             # print
             if verbose:
@@ -98,7 +99,7 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
                 'col': self.feature_names_[col],
                 'index_col': col,
                 'cutoff': cutoff,
-                'val': np.mean(y),  # values before splitting
+                'val': np.mean(y_left),  # will be the values before splitting in the next lower level
                 'flip': flip,
                 'val_right': np.mean(y_right),
                 'num_pts': y.size,
@@ -106,7 +107,8 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
             }]
 
             # generate tree for the non-leaf data
-            par_node = par_node + self.fit(x_left, y_left, depth + 1, feature_names=feature_names, verbose=verbose)
+            par_node = par_node + \
+                self.fit_node_recursive(x_left, y_left, depth + 1, verbose=verbose)
 
             self.depth += 1  # increase the depth since we call fit once
             self.rules_ = par_node
@@ -124,7 +126,11 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
             for j, rule in enumerate(self.rules_):
                 if j == len(self.rules_) - 1:
                     probs[i] = rule['val']
-                elif x[rule['index_col']] >= rule['cutoff']:
+                    continue
+                regular_condition = x[rule["index_col"]] >= rule["cutoff"]
+                flipped_condition = x[rule["index_col"]] < rule["cutoff"]
+                condition = flipped_condition if rule["flip"] else regular_condition
+                if condition:
                     probs[i] = rule['val_right']
                     break
         return np.vstack((1 - probs, probs)).transpose()  # probs (n, 2)
@@ -134,48 +140,51 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
         X = check_array(X)
         return np.argmax(self.predict_proba(X), axis=1)
 
+    """
     def __str__(self):
-        s = ''
-        for rule in self.rules_:
-            s += f"mean {rule['val'].round(3)} ({rule['num_pts']} pts)\n"
-            if 'col' in rule:
-                s += f"if {rule['col']} >= {rule['cutoff']} then {rule['val_right'].round(3)} ({rule['num_pts_right']} pts)\n"
-        return s
+        # s = ''
+        # for rule in self.rules_:
+        #     s += f"mean {rule['val'].round(3)} ({rule['num_pts']} pts)\n"
+        #     if 'col' in rule:
+        #         s += f"if {rule['col']} >= {rule['cutoff']} then {rule['val_right'].round(3)} ({rule['num_pts_right']} pts)\n"
+        # return s
+    """
 
-    def print_list(self):
+    def __str__(self):
         '''Print out the list in a nice way
         '''
-        s = ''
+        s = '> ------------------------------\n> Greedy Rule List\n> ------------------------------\n'
 
         def red(s):
-            return f"\033[91m{s}\033[00m"
+            # return f"\033[91m{s}\033[00m"
+            return s
 
         def cyan(s):
-            return f"\033[96m{s}\033[00m"
+            # return f"\033[96m{s}\033[00m"
+            return s
 
         def rule_name(rule):
             if rule['flip']:
                 return '~' + rule['col']
             return rule['col']
 
-        rule = self.rules_[0]
+        # rule = self.rules_[0]
         #     s += f"{red((100 * rule['val']).round(3))}% IwI ({rule['num_pts']} pts)\n"
         for rule in self.rules_:
-            s += f"\t{'':>35} => {cyan((100 * rule['val']).round(2)):>6}% risk ({rule['num_pts']} pts)\n"
+            s += u'\u2193\n' + f"{cyan((100 * rule['val']).round(2))}% risk ({rule['num_pts']} pts)\n"
             #         s += f"\t{'Else':>45} => {cyan((100 * rule['val']).round(2)):>6}% IwI ({rule['val'] * rule['num_pts']:.0f}/{rule['num_pts']} pts)\n"
             if 'col' in rule:
                 #             prefix = f"if {rule['col']} >= {rule['cutoff']}"
                 prefix = f"if {rule_name(rule)}"
-                val = f"{100 * rule['val_right'].round(3):.4}"
-                s += f"{prefix:>43} ===> {red(val)}% risk ({rule['num_pts_right']} pts)\n"
-        rule = self.rules_[-1]
+                val = f"{100 * rule['val_right'].round(3)}"
+                s += f"\t{prefix} ==> {red(val)}% risk ({rule['num_pts_right']} pts)\n"
+        # rule = self.rules_[-1]
         #     s += f"{red((100 * rule['val']).round(3))}% IwI ({rule['num_pts']} pts)\n"
-        print(s)
+        return s
 
-    def all_same(self, items):
-        return all(x == items[0] for x in items)
-
-    def find_best_split(self, x, y):
+    ######## HERE ONWARDS CUSTOM SPLITTING (DEPRECATED IN FAVOR OF SKLEARN STUMP) ########
+    ######################################################################################
+    def _find_best_split(self, x, y):
         """
         Find the best split from all features
         returns: the column to split on, the cutoff value, and the actual criterion_value
@@ -188,7 +197,7 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
         for i, c in enumerate(x.T):
 
             # find the best split of that feature
-            criterion_val, cur_cutoff = self.split_on_feature(c, y)
+            criterion_val, cur_cutoff = self._split_on_feature(c, y)
 
             # found perfect cutoff
             if criterion_val == 0:
@@ -201,7 +210,7 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
                 cutoff = cur_cutoff
         return col, cutoff, min_criterion_val
 
-    def split_on_feature(self, col, y):
+    def _split_on_feature(self, col, y):
         """
         col: the column we split on
         y: target var
@@ -215,7 +224,7 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
             y_predict = col < value
 
             # get criterion val of this split
-            criterion_val = self.weighted_criterion(y_predict, y)
+            criterion_val = self._weighted_criterion(y_predict, y)
 
             # check if it's the smallest one so far
             if criterion_val <= min_criterion_val:
@@ -223,7 +232,7 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
                 cutoff = value
         return min_criterion_val, cutoff
 
-    def weighted_criterion(self, split_decision, y_real):
+    def _weighted_criterion(self, split_decision, y_real):
         """Returns criterion calculated over a split
         split decision, True/False, and y_true can be multi class
         """
@@ -233,11 +242,11 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
 
         # choose the splitting criterion
         if self.criterion == 'entropy':
-            criterion_func = self.entropy_criterion
+            criterion_func = self._entropy_criterion
         elif self.criterion == 'gini':
-            criterion_func = self.gini_criterion
+            criterion_func = self._gini_criterion
         elif self.criterion == 'neg_corr':
-            return self.neg_corr_criterion(split_decision, y_real)
+            return self._neg_corr_criterion(split_decision, y_real)
 
         # left-hand side criterion
         s_left = criterion_func(y_real[split_decision])
@@ -262,7 +271,7 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
         s = weight_left * s_left + (1 - weight_left) * s_right
         return s
 
-    def gini_criterion(self, y):
+    def _gini_criterion(self, y):
         '''Returns gini index for one node
         = sum(pc * (1 – pc))
         '''
@@ -281,7 +290,7 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
 
         return s
 
-    def entropy_criterion(self, y):
+    def _entropy_criterion(self, y):
         """Returns entropy of a divided group of data
         Data may have multiple classes
         """
@@ -294,7 +303,7 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
             # weights for each class
             weight = sum(y == c) / n
 
-            def entropy_from_counts(c1, c2):
+            def _entropy_from_counts(c1, c2):
                 """Returns entropy of a group of data
                 c1: count of one class
                 c2: count of another class
@@ -302,17 +311,17 @@ class GreedyRuleListClassifier(BaseEstimator, RuleList, ClassifierMixin):
                 if c1 == 0 or c2 == 0:  # when there is only one class in the group, entropy is 0
                     return 0
 
-                def entropy_func(p): return -p * math.log(p, 2)
+                def _entropy_func(p): return -p * math.log(p, 2)
 
                 p1 = c1 * 1.0 / (c1 + c2)
                 p2 = c2 * 1.0 / (c1 + c2)
-                return entropy_func(p1) + entropy_func(p2)
+                return _entropy_func(p1) + _entropy_func(p2)
 
             # weighted avg
-            s += weight * entropy_from_counts(sum(y == c), sum(y != c))
+            s += weight * _entropy_from_counts(sum(y == c), sum(y != c))
         return s
 
-    def neg_corr_criterion(self, split_decision, y):
+    def _neg_corr_criterion(self, split_decision, y):
         '''Returns negative correlation between y
         and the binary splitting variable split_decision
         y must be binary

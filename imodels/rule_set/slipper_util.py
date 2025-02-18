@@ -4,6 +4,8 @@ import numpy as np
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.model_selection import train_test_split
 
+from imodels.util.arguments import check_fit_arguments
+
 
 class SlipperBaseEstimator(BaseEstimator, ClassifierMixin):
     """ An estimator that supports building rules as described in
@@ -35,7 +37,7 @@ class SlipperBaseEstimator(BaseEstimator, ClassifierMixin):
 
     def _condition_classify(self, X, condition):
         """
-        Helper funciton to make classificaitons for a condition
+        Helper function to make classifications for a condition
         in a rule
         """
 
@@ -63,7 +65,7 @@ class SlipperBaseEstimator(BaseEstimator, ClassifierMixin):
         return preds
 
     def _get_design_matrices(self, X, y, rule):
-        """ produce design matrices used in most equaitons"""
+        """ produce design matrices used in most equations"""
         preds = self._rule_predict(X, rule)
 
         W_plus_idx = np.where((preds == 1) & (y == 1))
@@ -76,10 +78,10 @@ class SlipperBaseEstimator(BaseEstimator, ClassifierMixin):
         equation 6 from Cohen & Singer (1999)
         """
         W_plus, W_minus = self._get_design_matrices(X, y, rule)
-        C_R = self.sample_weight(W_plus, W_minus)
+        # C_R = self._sample_weight(W_plus, W_minus)
         return np.sqrt(W_plus) - np.sqrt(W_minus)
 
-    def sample_weight(self, plus, minus):
+    def _sample_weight(self, plus, minus):
         """ Calculate learner sample weight
         in paper this is C_R, which is confidence of learner
         """
@@ -88,7 +90,7 @@ class SlipperBaseEstimator(BaseEstimator, ClassifierMixin):
 
     def _grow_rule(self, X, y):
         """ Starts with empty conjunction of conditions and
-        greddily adds rules to mazimize Z_tilda
+        greedily adds rules to maximize Z_tilde
         """
 
         stop_condition = False
@@ -100,20 +102,23 @@ class SlipperBaseEstimator(BaseEstimator, ClassifierMixin):
         while not stop_condition:
             candidate_rule = curr_rule.copy()
             for feat in features:
-                pivots = np.percentile(X[:, feat], range(0, 100, 4),
-                                       interpolation='midpoint')
-
+                try:
+                    pivots = np.percentile(X[:, feat], range(0, 100, 4),
+                                       method='linear')
+                except:
+                    pivots = np.percentile(X[:, feat], range(0, 100, 4), # deprecated
+                                           interpolation='midpoint')
                 # get a list of possible rules
                 feature_candidates = [
                     self._make_candidate(X, y, curr_rule, feat, A_c)
                     for A_c in pivots
                 ]
 
-                # get max Z_tilda and update candidate accordingly
-                tildas = [self._grow_rule_obj(X, y, r) for r in feature_candidates]
-                if max(tildas) > self._grow_rule_obj(X, y, candidate_rule):
+                # get max Z_tilde and update candidate accordingly
+                tildes = [self._grow_rule_obj(X, y, r) for r in feature_candidates]
+                if max(tildes) > self._grow_rule_obj(X, y, candidate_rule):
                     candidate_rule = feature_candidates[
-                        tildas.index(max(tildas))
+                        tildes.index(max(tildes))
                     ]
 
             preds = self._rule_predict(X, candidate_rule)
@@ -206,7 +211,7 @@ class SlipperBaseEstimator(BaseEstimator, ClassifierMixin):
         """
 
         V_plus, V_minus = self._get_design_matrices(X, y, rule)
-        C_R = self.sample_weight(V_plus, V_minus)
+        C_R = self._sample_weight(V_plus, V_minus)
         return (1 - V_plus - V_minus) + V_plus * np.exp(-C_R) \
                + V_minus * np.exp(C_R)
 
@@ -221,14 +226,14 @@ class SlipperBaseEstimator(BaseEstimator, ClassifierMixin):
     def _set_rule_or_default(self, X, y, learned_rule):
         """
         Compare output of eq 5 between learned rule and default rule
-        return rule that minmizes eq 5
+        return rule that minimizes eq 5
         """
 
         rules = [self._make_default_rule(X, y), learned_rule]
         scores = [self._eq_5(X, y, rule) for rule in rules]
         self.rule = rules[scores.index(min(scores))]
 
-    def make_feature_dict(self, num_features, features):
+    def _make_feature_dict(self, num_features, features):
         """
         Map features to place holder names
         """
@@ -258,18 +263,18 @@ class SlipperBaseEstimator(BaseEstimator, ClassifierMixin):
         """
         return self._rule_predict(X, self.rule)
 
-    def fit(self, X, y, sample_weight=None, features=None):
+    def fit(self, X, y, sample_weight=None, feature_names=None):
         """
         Main loop for training
         """
-
+        X, y, feature_names = check_fit_arguments(self, X, y, feature_names) 
         if sample_weight is not None:
             self.D = sample_weight
 
         X_grow, X_prune, y_grow, y_prune = \
             train_test_split(X, y, test_size=0.33)
 
-        self.make_feature_dict(X.shape[1], features)
+        self._make_feature_dict(X.shape[1], feature_names)
 
         rule = self._grow_rule(X_grow, y_grow)
         rule = self._prune_rule(X_prune, y_prune, rule)

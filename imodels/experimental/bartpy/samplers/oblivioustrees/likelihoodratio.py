@@ -2,12 +2,12 @@ from typing import List
 
 import numpy as np
 
-from imodels.experimental.bartpy.model import Model
-from imodels.experimental.bartpy.mutation import TreeMutation, GrowMutation, PruneMutation
-from imodels.experimental.bartpy.node import LeafNode, TreeNode
-from imodels.experimental.bartpy.samplers.treemutation import TreeMutationLikihoodRatio
-from imodels.experimental.bartpy.sigma import Sigma
-from imodels.experimental.bartpy.tree import Tree
+from ...model import Model
+from ...mutation import TreeMutation, GrowMutation, PruneMutation
+from ...node import LeafNode, TreeNode
+from ...samplers.treemutation import TreeMutationLikelihoodRatio
+from ...sigma import Sigma
+from ...tree import Tree
 
 
 def log_grow_ratio(combined_node: LeafNode, left_node: LeafNode, right_node: LeafNode, sigma: Sigma, sigma_mu: float):
@@ -29,7 +29,7 @@ def log_grow_ratio(combined_node: LeafNode, left_node: LeafNode, right_node: Lea
     return first_term + ((var_mu / (2 * var)) * resp_contribution)
 
 
-class UniformTreeMutationLikihoodRatio(TreeMutationLikihoodRatio):
+class UniformTreeMutationLikelihoodRatio(TreeMutationLikelihoodRatio):
 
     def __init__(self,
                  prob_method: List[float]=None):
@@ -55,13 +55,13 @@ class UniformTreeMutationLikihoodRatio(TreeMutationLikihoodRatio):
             mutation: PruneMutation = mutation
             return self.log_tree_ratio_prune(model, mutation)
 
-    def log_likihood_ratio(self, model: Model, tree: Tree, proposal: TreeMutation):
+    def log_likelihood_ratio(self, model: Model, tree: Tree, proposal: TreeMutation):
         if proposal.kind == "grow":
             proposal: GrowMutation = proposal
-            log_lik = self.log_likihood_ratio_grow(model, proposal)
+            log_lik = self.log_likelihood_ratio_grow(model, proposal)
         elif proposal.kind == "prune":
             proposal: PruneMutation = proposal
-            log_lik = self.log_likihood_ratio_prune(model, proposal)
+            log_lik = self.log_likelihood_ratio_prune(model, proposal)
         #else:
         #    raise NotImplementedError("Only prune and grow mutations supported")
         if type(log_lik) == np.ma.core.MaskedConstant:
@@ -69,11 +69,11 @@ class UniformTreeMutationLikihoodRatio(TreeMutationLikihoodRatio):
         return log_lik
 
     @staticmethod
-    def log_likihood_ratio_grow(model: Model, proposal: TreeMutation):
+    def log_likelihood_ratio_grow(model: Model, proposal: TreeMutation):
         return log_grow_ratio(proposal.existing_node, proposal.updated_node.left_child, proposal.updated_node.right_child, model.sigma, model.sigma_m)
 
     @staticmethod
-    def log_likihood_ratio_prune(model: Model, proposal: TreeMutation):
+    def log_likelihood_ratio_prune(model: Model, proposal: TreeMutation):
         return - log_grow_ratio(proposal.updated_node, proposal.existing_node.left_child, proposal.existing_node.right_child, model.sigma, model.sigma_m)
 
     def log_grow_transition_ratio(self, tree: Tree, mutation: GrowMutation):
